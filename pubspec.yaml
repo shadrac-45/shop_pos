@@ -1,0 +1,67 @@
+name: shop_pos
+description: "ShopPOS — Offline-first Point of Sale for small shops in emerging markets."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Database — Isar (offline-first local DB)
+  isar: ^3.1.0+1
+  isar_flutter_libs: ^3.1.0+1
+
+  # State Management — Riverpod
+  hooks_riverpod: ^2.5.2
+  flutter_hooks: ^0.20.5
+  riverpod_annotation: '>=2.0.0 <3.0.0'
+
+  # Barcode scanning
+  mobile_scanner: ^5.2.3
+
+  # Utilities
+  intl: ^0.19.0
+  path_provider: ^2.1.4
+  connectivity_plus: ^6.0.5
+  dio: ^5.7.0
+
+  # Crypto for PIN hashing
+  crypto: ^3.0.5
+
+  # For UUID generation
+  uuid: ^4.5.1
+  flutter_local_notifications: ^21.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+  # Isar code generation
+  isar_generator: ^3.1.0+1
+
+  # Riverpod code generation
+  riverpod_generator: '>=2.0.0 <3.0.0'
+
+  # Build runner for code gen
+  build_runner: ^2.4.13
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
