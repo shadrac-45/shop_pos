@@ -1,78 +1,43 @@
-/// ============================================
-/// Product Model — Isar Collection
-/// ============================================
-/// Represents a product in the shop inventory.
-/// Each product can have multiple Batch records
-/// (for tracking expiry via FEFO).
-/// ============================================
-library;
-
 import 'package:isar/isar.dart';
+import 'batch.dart';
 
 part 'product.g.dart';
 
-@collection
+@Collection()
 class Product {
   Id id = Isar.autoIncrement;
 
-  /// Display name of the product (e.g., "Pure Water")
-  @Index(type: IndexType.value)
   late String name;
-
-  /// Unit selling price in local currency (GH₵)
   late double price;
-
-  /// Product category for filtering (e.g., "Beverages", "Food")
-  @Index()
   late String category;
+  int quickButtonColor = 0xFF4CAF50; // default green
 
-  /// ARGB color int for the quick-sale button on the cashier screen.
-  /// Stored as int to avoid Isar serialization issues with Color.
-  int quickButtonColor = 0xFF2196F3; // Default: blue
+  @Backlink(to: 'product')
+  final IsarLinks<Batch> batches = IsarLinks<Batch>();
 
-  /// Optional barcode string for scanner lookup.
-  @Index(unique: false)
-  String? barcode;
-
-  /// Whether this product is active (soft delete support).
-  bool isActive = true;
-
-  /// ISO timestamp of when the product was created.
-  DateTime createdAt = DateTime.now();
-
-  /// ISO timestamp of last update.
-  DateTime updatedAt = DateTime.now();
-
-  // ── Computed Properties (ignored by Isar) ────────
-
-  /// Total stock across all batches.
-  /// Computed at read-time, not persisted.
+  // Computed properties
+  // NOTE: These require the 'batches' link to be preloaded (or queried fresh).
+  // Providers do NOT preload by default — see cart_provider.dart for fix.
   @ignore
-  int totalStock = 0;
+  double get totalStock =>
+      batches.fold(0.0, (sum, batch) => sum + batch.quantity);
 
-  /// The batch that expires soonest (for FEFO display).
-  /// Set dynamically when loading product with batches.
   @ignore
-  DateTime? soonestExpiry;
-
-  /// Number of days until the soonest batch expires.
-  @ignore
-  int? get daysUntilExpiry {
-    if (soonestExpiry == null) return null;
-    return soonestExpiry!.difference(DateTime.now()).inDays;
+  Batch? get soonestExpiryBatch {
+    final activeBatches = batches.where((b) => b.quantity > 0).toList();
+    if (activeBatches.isEmpty) return null;
+    activeBatches.sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
+    return activeBatches.first;
   }
 
-  /// Human-readable expiry status.
   @ignore
-  String get expiryStatus {
-    final days = daysUntilExpiry;
-    if (days == null) return 'No stock';
-    if (days < 0) return 'EXPIRED';
-    if (days <= 7) return 'Expires in $days days';
-    if (days <= 30) return 'Expires in $days days';
-    return 'Good ($days days)';
+  int get daysUntilExpiry {
+    if (soonestExpiryBatch == null) return 999;
+    final difference =
+        soonestExpiryBatch!.expiryDate.difference(DateTime.now()).inDays;
+    return difference;
   }
 
-  @override
-  String toString() => 'Product(id: $id, name: $name, price: $price)';
+  @ignore
+  bool get isExpired => daysUntilExpiry <= 0;
 }

@@ -1,19 +1,8 @@
-/// ============================================
-/// Login Screen — ShopPOS
-/// ============================================
-/// PIN-based login with 4-digit keypad.
-/// Routes to Cashier Sales or Owner Products
-/// based on the user's role.
-/// ============================================
-library;
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/constants/app_constants.dart';
+
 import '../../../providers/auth_provider.dart';
-import '../main/screens/main_shell_screen.dart';
+import '../../main/screens/main_shell_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -22,490 +11,186 @@ class LoginScreen extends ConsumerStatefulWidget {
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen>
-    with SingleTickerProviderStateMixin {
-  String _pin = '';
-  bool _isLoading = false;
-  bool _showError = false;
-  String _errorMessage = '';
+class _LoginScreenState extends ConsumerState<LoginScreen> {
+  final List<String> _pin = List.filled(4, '');
+  int _currentIndex = 0;
 
-  late AnimationController _shakeController;
-  late Animation<double> _shakeAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _shakeController = AnimationController(
-      duration: const Duration(milliseconds: 500),
-      vsync: this,
-    );
-    _shakeAnimation = Tween<double>(begin: 0, end: 24)
-        .chain(CurveTween(curve: Curves.elasticIn))
-        .animate(_shakeController)
-      ..addStatusListener((status) {
-        if (status == AnimationStatus.completed) {
-          _shakeController.reverse();
-        }
+  void _onNumberPress(String number) {
+    if (_currentIndex < 4) {
+      setState(() {
+        _pin[_currentIndex] = number;
+        _currentIndex++;
       });
-  }
 
-  @override
-  void dispose() {
-    _shakeController.dispose();
-    super.dispose();
-  }
-
-  /// Handle a keypad digit press.
-  void _onDigitPressed(String digit) {
-    if (_pin.length >= AppConstants.pinLength) return;
-
-    HapticFeedback.lightImpact();
-
-    setState(() {
-      _pin += digit;
-      _showError = false;
-    });
-
-    // Auto-submit when 4 digits entered
-    if (_pin.length == AppConstants.pinLength) {
-      _attemptLogin();
+      // Auto-attempt login when 4 digits are entered
+      if (_currentIndex == 4) {
+        _attemptLogin();
+      }
     }
   }
 
-  /// Handle backspace press.
   void _onBackspace() {
-    if (_pin.isEmpty) return;
-    HapticFeedback.lightImpact();
-    setState(() {
-      _pin = _pin.substring(0, _pin.length - 1);
-      _showError = false;
-    });
+    if (_currentIndex > 0) {
+      setState(() {
+        _currentIndex--;
+        _pin[_currentIndex] = '';
+      });
+    }
   }
 
-  /// Attempt to log in with the entered PIN.
   Future<void> _attemptLogin() async {
-    if (_isLoading) return;
+    final enteredPin = _pin.join();
 
-    setState(() => _isLoading = true);
+    // Call login from auth provider
+    await ref.read(currentUserProvider.notifier).login(enteredPin);
 
-    // Small delay for UX feedback
-    await Future.delayed(const Duration(milliseconds: 300));
+    // Check if login was successful
+    final user = ref.read(currentUserProvider);
 
-    final authService = ref.read(authServiceProvider);
-    final user = await authService.login(_pin);
+    if (user != null && mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const MainShellScreen()),
+      );
+    } else if (mounted) {
+      // Wrong PIN - reset and show error
+      setState(() {
+        _pin.fillRange(0, 4, '');
+        _currentIndex = 0;
+      });
 
-    if (!mounted) return;
-
-    if (user != null) {
-      // Successful login — navigate based on role
-      HapticFeedback.heavyImpact();
-
-      // Navigate to main shell screen
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const MainShellScreen(),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Incorrect PIN. Please try again.'),
+          backgroundColor: Colors.red,
         ),
       );
-    } else {
-      // Failed login — show error
-      HapticFeedback.vibrate();
-      _shakeController.forward();
-
-      setState(() {
-        _showError = true;
-        _errorMessage = 'Invalid PIN. Please try again.';
-        _pin = '';
-        _isLoading = false;
-      });
     }
-  }
-
-  /// Manual login button press.
-  void _onLoginPressed() {
-    if (_pin.length != AppConstants.pinLength) {
-      setState(() {
-        _showError = true;
-        _errorMessage = 'Please enter a 4-digit PIN';
-      });
-      _shakeController.forward();
-      return;
-    }
-    _attemptLogin();
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenHeight = MediaQuery.of(context).size.height;
-    final isSmallScreen = screenHeight < 700;
+    final user = ref.watch(currentUserProvider);
+
+    // If already logged in, redirect immediately
+    if (user != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const MainShellScreen()),
+          );
+        }
+      });
+    }
 
     return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
+      backgroundColor: Colors.white,
       body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: screenHeight -
-                  MediaQuery.of(context).padding.top -
-                  MediaQuery.of(context).padding.bottom,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(height: isSmallScreen ? 24 : 48),
-
-                  // ── Logo & Header ──────────────────────
-                  _buildHeader(isSmallScreen),
-
-                  SizedBox(height: isSmallScreen ? 24 : 40),
-
-                  // ── PIN Display Boxes ──────────────────
-                  AnimatedBuilder(
-                    animation: _shakeAnimation,
-                    builder: (context, child) {
-                      return Transform.translate(
-                        offset: Offset(
-                          _shakeAnimation.value *
-                              (_shakeController.status ==
-                                      AnimationStatus.forward
-                                  ? 1
-                                  : -1),
-                          0,
-                        ),
-                        child: child,
-                      );
-                    },
-                    child: _buildPinBoxes(),
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // ── Error Message ──────────────────────
-                  _buildErrorMessage(),
-
-                  SizedBox(height: isSmallScreen ? 16 : 24),
-
-                  // ── Numeric Keypad ─────────────────────
-                  _buildKeypad(),
-
-                  SizedBox(height: isSmallScreen ? 16 : 24),
-
-                  // ── Login Button ───────────────────────
-                  _buildLoginButton(),
-
-                  SizedBox(height: isSmallScreen ? 16 : 32),
-
-                  // ── Default PINs Hint (remove in prod) ─
-                  _buildDefaultPinsHint(),
-
-                  const SizedBox(height: 16),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// App logo and welcome header.
-  Widget _buildHeader(bool isSmallScreen) {
-    return Column(
-      children: [
-        // App icon container
-        Container(
-          width: isSmallScreen ? 64 : 80,
-          height: isSmallScreen ? 64 : 80,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [AppColors.primary, AppColors.primaryLight],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.3),
-                blurRadius: 20,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Icon(
-            Icons.point_of_sale_rounded,
-            size: isSmallScreen ? 32 : 40,
-            color: AppColors.textOnPrimary,
-          ),
-        ),
-
-        SizedBox(height: isSmallScreen ? 12 : 20),
-
-        // App name
-        Text(
-          AppConstants.appName,
-          style: TextStyle(
-            fontSize: isSmallScreen ? 28 : 32,
-            fontWeight: FontWeight.w800,
-            color: AppColors.textPrimary,
-            letterSpacing: -0.5,
-          ),
-        ),
-
-        const SizedBox(height: 4),
-
-        // Welcome text
-        Text(
-          'Welcome Back!',
-          style: TextStyle(
-            fontSize: isSmallScreen ? 16 : 18,
-            fontWeight: FontWeight.w400,
-            color: AppColors.textSecondary,
-          ),
-        ),
-
-        const SizedBox(height: 4),
-
-        Text(
-          'Enter your PIN to continue',
-          style: TextStyle(
-            fontSize: isSmallScreen ? 13 : 14,
-            color: AppColors.textMuted,
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Four PIN indicator boxes.
-  Widget _buildPinBoxes() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(AppConstants.pinLength, (index) {
-        final isFilled = index < _pin.length;
-        final isActive = index == _pin.length;
-
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOutCubic,
-          width: 56,
-          height: 64,
-          margin: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: isFilled
-                ? AppColors.primary.withValues(alpha: 0.15)
-                : AppColors.surfaceBg,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: _showError
-                  ? AppColors.danger
-                  : isFilled
-                      ? AppColors.primary
-                      : isActive
-                          ? AppColors.primary.withValues(alpha: 0.5)
-                          : AppColors.border,
-              width: isFilled || isActive ? 2 : 1,
-            ),
-          ),
-          child: Center(
-            child: isFilled
-                ? Container(
-                    width: 16,
-                    height: 16,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                    ),
-                  )
-                : null,
-          ),
-        );
-      }),
-    );
-  }
-
-  /// Error message display.
-  Widget _buildErrorMessage() {
-    return AnimatedOpacity(
-      opacity: _showError ? 1.0 : 0.0,
-      duration: const Duration(milliseconds: 200),
-      child: SizedBox(
-        height: 24,
-        child: Text(
-          _errorMessage,
-          style: const TextStyle(
-            color: AppColors.danger,
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Numeric keypad grid.
-  Widget _buildKeypad() {
-    const keys = [
-      ['1', '2', '3'],
-      ['4', '5', '6'],
-      ['7', '8', '9'],
-      ['', '0', 'backspace'],
-    ];
-
-    return Column(
-      children: keys.map((row) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: row.map((key) {
-              if (key.isEmpty) {
-                return const SizedBox(width: 80, height: 64);
-              }
-              return _buildKeypadButton(key);
-            }).toList(),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  /// Individual keypad button.
-  Widget _buildKeypadButton(String key) {
-    final isBackspace = key == 'backspace';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isBackspace ? _onBackspace : () => _onDigitPressed(key),
-          onLongPress: isBackspace
-              ? () {
-                  HapticFeedback.mediumImpact();
-                  setState(() {
-                    _pin = '';
-                    _showError = false;
-                  });
-                }
-              : null,
-          borderRadius: BorderRadius.circular(16),
-          splashColor: AppColors.primary.withValues(alpha: 0.2),
-          highlightColor: AppColors.primary.withValues(alpha: 0.1),
-          child: Container(
-            width: 80,
-            height: 64,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceBg,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: AppColors.border,
-                width: 1,
-              ),
-            ),
-            child: Center(
-              child: isBackspace
-                  ? const Icon(
-                      Icons.backspace_outlined,
-                      color: AppColors.textSecondary,
-                      size: 24,
-                    )
-                  : Text(
-                      key,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Big green LOGIN button.
-  Widget _buildLoginButton() {
-    return SizedBox(
-      width: double.infinity,
-      height: 56,
-      child: ElevatedButton(
-        onPressed: _isLoading ? null : _onLoginPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primary,
-          foregroundColor: AppColors.textOnPrimary,
-          disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.5),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          elevation: 0,
-        ),
-        child: _isLoading
-            ? const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: AppColors.textOnPrimary,
-                ),
-              )
-            : const Text(
-                'LOGIN',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 2.0,
-                ),
-              ),
-      ),
-    );
-  }
-
-  /// Hint showing default PINs (for development only).
-  Widget _buildDefaultPinsHint() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceBg.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.5)),
-      ),
-      child: const Column(
-        children: [
-          Text(
-            'Default PINs (for testing)',
-            style: TextStyle(
-              fontSize: 12,
-              color: AppColors.textMuted,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          SizedBox(height: 4),
-          Row(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                'Owner: 1234',
+              // Logo / Icon
+              const Icon(Icons.storefront, size: 90, color: Colors.green),
+              const SizedBox(height: 32),
+
+              const Text(
+                'ShopPOS',
                 style: TextStyle(
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 36,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
                 ),
               ),
-              SizedBox(width: 24),
-              Text(
-                'Cashier: 0000',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w600,
+              const SizedBox(height: 8),
+              const Text(
+                'Welcome Back!',
+                style: TextStyle(fontSize: 20, color: Colors.grey),
+              ),
+
+              const SizedBox(height: 60),
+
+              // PIN Display
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(4, (index) {
+                  return Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 10),
+                    width: 55,
+                    height: 65,
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: _pin[index].isEmpty ? Colors.grey : Colors.green,
+                        width: 2,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Center(
+                      child: Text(
+                        _pin[index].isEmpty ? '•' : _pin[index],
+                        style: const TextStyle(
+                            fontSize: 32, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+
+              const SizedBox(height: 80),
+
+              // Numeric Keypad
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  childAspectRatio: 1.1,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
                 ),
+                itemCount: 12,
+                itemBuilder: (context, index) {
+                  if (index == 9) return const SizedBox.shrink(); // Empty space
+                  if (index == 11) {
+                    return ElevatedButton(
+                      onPressed: _onBackspace,
+                      style: ElevatedButton.styleFrom(
+                        shape: const CircleBorder(),
+                        padding: const EdgeInsets.all(20),
+                      ),
+                      child: const Icon(Icons.backspace, size: 28),
+                    );
+                  }
+
+                  final number = index == 10 ? '0' : (index + 1).toString();
+
+                  return ElevatedButton(
+                    onPressed: () => _onNumberPress(number),
+                    style: ElevatedButton.styleFrom(
+                      shape: const CircleBorder(),
+                      padding: const EdgeInsets.all(20),
+                      backgroundColor: Colors.grey[100],
+                      foregroundColor: Colors.black87,
+                    ),
+                    child: Text(
+                      number,
+                      style: const TextStyle(
+                          fontSize: 32, fontWeight: FontWeight.w500),
+                    ),
+                  );
+                },
+              ),
+
+              const SizedBox(height: 30),
+              const Text(
+                'Default test PIN: 1234',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

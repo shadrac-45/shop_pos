@@ -1,113 +1,108 @@
-/// ============================================
-/// Cart Provider — Riverpod
-/// ============================================
-/// Manages the shopping cart state for the cashier
-/// sales screen. Handles add/remove/update items
-/// and total calculations.
-/// ============================================
-library;
-
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import '../models/product.dart';
+import '../models/batch.dart';
 import '../models/sale.dart';
+import 'database_provider.dart';
 
-/// Holds the current cart items as a list of SaleItem.
-final cartProvider =
-    StateNotifierProvider<CartNotifier, List<SaleItem>>((ref) {
-  return CartNotifier();
+final cartProvider = StateNotifierProvider<CartNotifier, List<CartItem>>((ref) {
+  return CartNotifier(ref);
 });
 
-/// Computed total amount of all items in the cart.
-final cartTotalProvider = Provider<double>((ref) {
-  final cart = ref.watch(cartProvider);
-  return cart.fold(0.0, (sum, item) => sum + item.subtotal);
-});
+class CartItem {
+  final Product product;
+  final Batch batch;
+  final int quantity;
 
-/// Computed total number of items in the cart.
-final cartItemCountProvider = Provider<int>((ref) {
-  final cart = ref.watch(cartProvider);
-  return cart.fold(0, (sum, item) => sum + item.qty);
-});
+  CartItem({
+    required this.product,
+    required this.batch,
+    required this.quantity,
+  });
 
-/// StateNotifier managing cart operations.
-class CartNotifier extends StateNotifier<List<SaleItem>> {
-  CartNotifier() : super([]);
+  double get subtotal => product.price * quantity;
+}
 
-  /// Add a product to the cart. If it already exists, increment quantity.
-  void addItem({
-    required int productId,
-    required String name,
-    required double price,
-    int qty = 1,
-  }) {
-    final existingIndex =
-        state.indexWhere((item) => item.productId == productId);
+class CartNotifier extends StateNotifier<List<CartItem>> {
+  final Ref ref;
 
-    if (existingIndex >= 0) {
-      // Product already in cart — increment quantity
-      final updated = List<SaleItem>.from(state);
-      updated[existingIndex].qty += qty;
-      state = updated;
-    } else {
-      // New product — add to cart
-      state = [
-        ...state,
-        SaleItem(productId: productId, name: name, price: price, qty: qty),
-      ];
-    }
-  }
+  CartNotifier(this.ref) : super([]);
 
-  /// Remove a product from the cart entirely.
-  void removeItem(int productId) {
-    state = state.where((item) => item.productId != productId).toList();
-  }
+  /// Add item to cart using FEFO (First Expired, First Out)
+  Future<void> addItem(Product product, int quantity) async {
+    final isar = ref.read(isarProvider);
 
-  /// Update the quantity of an item. Removes if qty <= 0.
-  void updateQuantity(int productId, int newQty) {
-    if (newQty <= 0) {
-      removeItem(productId);
+    // CRITICAL FIX: Preload batches link so Product computed properties work
+    final freshProduct = await isar.products.get(product.id);
+    if (freshProduct == null) return;
+
+    await freshProduct.batches.load(); // ← This was the missing fix
+
+    final soonestBatch = freshProduct.soonestExpiryBatch;
+
+    if (soonestBatch == null || soonestBatch.quantity < quantity) {
+      // Not enough stock or item is expired
       return;
     }
 
-    final updated = List<SaleItem>.from(state);
-    final index = updated.indexWhere((item) => item.productId == productId);
-    if (index >= 0) {
-      updated[index].qty = newQty;
-      state = updated;
-    }
+    final newItem = CartItem(
+      product: freshProduct, // use preloaded version
+      batch: soonestBatch,
+      quantity: quantity,
+    );
+
+    state = [...state, newItem];
   }
 
-  /// Increment quantity by 1.
-  void increment(int productId) {
-    final index = state.indexWhere((item) => item.productId == productId);
-    if (index >= 0) {
-      final updated = List<SaleItem>.from(state);
-      updated[index].qty += 1;
-      state = updated;
-    }
+  void removeItem(int index) {
+    if (index < 0 || index >= state.length) return;
+    state = [...state]..removeAt(index);
   }
 
-  /// Decrement quantity by 1. Removes if it reaches 0.
-  void decrement(int productId) {
-    final index = state.indexWhere((item) => item.productId == productId);
-    if (index >= 0) {
-      if (state[index].qty <= 1) {
-        removeItem(productId);
-      } else {
-        final updated = List<SaleItem>.from(state);
-        updated[index].qty -= 1;
-        state = updated;
-      }
-    }
-  }
-
-  /// Clear all items from the cart.
   void clearCart() {
     state = [];
   }
 
-  /// Get the quantity of a specific product in the cart.
-  int getQuantity(int productId) {
-    final index = state.indexWhere((item) => item.productId == productId);
-    return index >= 0 ? state[index].qty : 0;
+  double get totalAmount => state.fold(0.0, (sum, item) => sum + item.subtotal);
+
+  /// Complete the sale and deduct stock from batches
+  Future<bool> completeSale(String paymentType, String cashierPin) async {
+    final isar = ref.read(isarProvider);
+
+    try {
+      await isar.writeTxn(() async {
+        // Deduct stock from each batch
+        for (var item in state) {
+          final batchToUpdate = await isar.batchs.get(item.batch.id); // ← fixed accessor
+          if (batchToUpdate != null) {
+            batchToUpdate.quantity -= item.quantity;
+            await isar.batchs.put(batchToUpdate); // ← fixed accessor
+          }
+        }
+
+        // Create and save the Sale record
+        final sale = Sale()
+          ..timestamp = DateTime.now()
+          ..cashierPin = cashierPin
+          ..totalAmount = totalAmount
+          ..paymentType = paymentType
+          ..itemsJson = state
+              .map((e) => {
+                    'productId': e.product.id,
+                    'productName': e.product.name,
+                    'quantity': e.quantity,
+                    'price': e.product.price,
+                  })
+              .toList()
+              .toString();
+
+        await isar.sales.put(sale);
+      });
+
+      clearCart();
+      return true;
+    } catch (e) {
+      print('Error completing sale: $e');
+      return false;
+    }
   }
 }

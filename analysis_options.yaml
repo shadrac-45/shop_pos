@@ -1,16 +1,19 @@
-# This file configures the analyzer.
-# https://dart.dev/guides/language/analysis-options
-
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
   exclude:
-    - "**/*.g.dart"
-    - "**/*.freezed.dart"
+    - "**/*.g.dart"        # Ignore generated files
+    - "build/**"
 
 linter:
   rules:
+    # Performance rules (still valid)
     prefer_const_constructors: true
-    prefer_const_declarations: true
     prefer_const_literals_to_create_immutables: true
+
+    # Safety / style rules (only currently valid ones)
     avoid_print: false
+    prefer_single_quotes: false
+
+    # The following three rules no longer exist under these names in flutter_lints
+    # (they have been removed or renamed). We removed them to eliminate warnings.

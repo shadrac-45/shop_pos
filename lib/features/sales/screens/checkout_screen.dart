@@ -12,8 +12,9 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../providers/cart_provider.dart';
-import '../../../providers/sales_provider.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../utils/currency_helpers.dart';
+
 
 class CheckoutScreen extends ConsumerStatefulWidget {
   const CheckoutScreen({super.key});
@@ -37,21 +38,23 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     super.dispose();
   }
 
-  /// Process the sale.
-  Future<void> _processSale(double total) async {
+  /// Process the sale using the corrected CartNotifier
+  Future<void> _processSale() async {
     if (_isProcessing) return;
+
+    final total = ref.read(cartProvider.notifier).totalAmount;
 
     double cashAmt = 0;
     double momoAmt = 0;
 
     if (_selectedPayment == AppConstants.paymentSplit) {
-      cashAmt = double.tryParse(_cashController.text) ?? 0;
-      momoAmt = double.tryParse(_momoController.text) ?? 0;
+      cashAmt = double.tryParse(_cashController.text.trim()) ?? 0;
+      momoAmt = double.tryParse(_momoController.text.trim()) ?? 0;
 
       if ((cashAmt + momoAmt - total).abs() > 0.01) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Split amounts must equal the total exact amount.'),
+            content: Text('Split amounts must equal the total exactly.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -66,28 +69,38 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      final salesService = ref.read(salesServiceProvider);
-      await salesService.completeSale(
-        paymentType: _selectedPayment,
-        amountCash: cashAmt,
-        amountMomo: momoAmt,
-      );
+      final currentUser = ref.read(currentUserProvider);
+      final cashierPin = currentUser?.pinHash ?? '1234'; // fallback for testing
 
-      if (!mounted) return;
-      HapticFeedback.heavyImpact();
+      final success = await ref.read(cartProvider.notifier).completeSale(
+            _selectedPayment,
+            cashierPin,
+          );
 
-      // Show success receipt overlay
-      setState(() {
-        _showSuccessReceipt = true;
-        _isProcessing = false;
-      });
+      if (!context.mounted) return;
 
-      // Wait a moment then pop back to sales
-      await Future.delayed(const Duration(seconds: 2));
-      if (!mounted) return;
-      Navigator.of(context).pop();
+      if (success) {
+        HapticFeedback.heavyImpact();
+        setState(() {
+          _showSuccessReceipt = true;
+          _isProcessing = false;
+        });
+
+        // Auto close after success
+        await Future.delayed(const Duration(seconds: 2));
+        if (!context.mounted) return;
+        Navigator.of(context).pop(); // back to sales screen
+      } else {
+        setState(() => _isProcessing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to complete sale. Please try again.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
     } catch (e) {
-      if (!mounted) return;
+      if (!context.mounted) return;
       setState(() => _isProcessing = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -101,7 +114,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
   @override
   Widget build(BuildContext context) {
     final cartItems = ref.watch(cartProvider);
-    final total = ref.watch(cartTotalProvider);
+    final total = ref.watch(cartProvider.notifier.select((notifier) => notifier.totalAmount));
 
     if (cartItems.isEmpty && !_showSuccessReceipt) {
       return Scaffold(
@@ -112,13 +125,15 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: _showSuccessReceipt ? null : AppBar(
-        title: const Text('Checkout', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: AppColors.cardBg,
-      ),
+      appBar: _showSuccessReceipt 
+          ? null 
+          : AppBar(
+              title: const Text('Checkout', style: TextStyle(fontWeight: FontWeight.bold)),
+              backgroundColor: AppColors.cardBg,
+            ),
       body: Stack(
         children: [
-          // Main Body
+          // Main Content
           SafeArea(
             child: Column(
               children: [
@@ -128,7 +143,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // TOTAL
+                        // Grand Total
                         Center(
                           child: Column(
                             children: [
@@ -150,8 +165,11 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                         ),
                         const SizedBox(height: 30),
 
-                        // ITEMS SUMMARY
-                        const Text('Items Summary', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textPrimary)),
+                        // Items Summary
+                        const Text(
+                          'Items Summary',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textPrimary),
+                        ),
                         const SizedBox(height: 12),
                         Container(
                           decoration: BoxDecoration(
@@ -168,18 +186,28 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                               final item = cartItems[i];
                               return ListTile(
                                 dense: true,
-                                title: Text(item.name, style: const TextStyle(color: AppColors.textPrimary)),
-                                subtitle: Text('${CurrencyHelpers.format(item.price)} x ${item.qty}', style: const TextStyle(color: AppColors.textSecondary)),
-                                trailing: Text(CurrencyHelpers.format(item.subtotal), style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 14)),
+                                title: Text(item.product.name, style: const TextStyle(color: AppColors.textPrimary)),
+                                subtitle: Text(
+                                  '${CurrencyHelpers.format(item.product.price)} × ${item.quantity}',
+                                  style: const TextStyle(color: AppColors.textSecondary),
+                                ),
+                                trailing: Text(
+                                  CurrencyHelpers.format(item.subtotal),
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 14),
+                                ),
                               );
                             },
                           ),
                         ),
 
                         const SizedBox(height: 30),
-                        const Text('Payment Method', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textPrimary)),
+
+                        // Payment Method
+                        const Text(
+                          'Payment Method',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textPrimary),
+                        ),
                         const SizedBox(height: 12),
-                        
                         Row(
                           children: [
                             Expanded(child: _buildPaymentOption(AppConstants.paymentCash, Icons.payments_rounded, 'Cash')),
@@ -190,7 +218,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                           ],
                         ),
 
-                        // SPLIT INPUTS
+                        // Split Payment Inputs
                         if (_selectedPayment == AppConstants.paymentSplit) ...[
                           const SizedBox(height: 20),
                           Container(
@@ -207,14 +235,14 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                                 _buildSplitField('MoMo Amount', _momoController),
                               ],
                             ),
-                          )
-                        ]
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 ),
 
-                // COMPLETE BUTTON
+                // Complete Sale Button
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: const BoxDecoration(
@@ -222,7 +250,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                     border: Border(top: BorderSide(color: AppColors.border)),
                   ),
                   child: ElevatedButton(
-                    onPressed: _isProcessing ? null : () => _processSale(total),
+                    onPressed: _isProcessing ? null : _processSale,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.success,
                       padding: const EdgeInsets.symmetric(vertical: 18),
@@ -231,14 +259,17 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                     ),
                     child: _isProcessing
                         ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text('COMPLETE SALE', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.white)),
+                        : const Text(
+                            'COMPLETE SALE',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.white),
+                          ),
                   ),
-                )
+                ),
               ],
             ),
           ),
 
-          // SUCCESS RECEIPT OVERLAY
+          // Success Receipt Overlay
           if (_showSuccessReceipt)
             Positioned.fill(
               child: Container(
@@ -272,7 +303,7 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                             const Text(
                               'Receipt saved and stock deducted.',
                               style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
-                            )
+                            ),
                           ],
                         ),
                       );

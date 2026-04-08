@@ -3,16 +3,17 @@
 /// ============================================
 /// Dialog for owners to edit an existing product's
 /// name, price, category, and quick button color.
-/// Note: Stock/batches are managed separately.
 /// ============================================
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+
 import '../../../core/theme/app_colors.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../models/product.dart';
-import '../../../providers/product_provider.dart';
+import '../../../providers/database_provider.dart';
 
 class EditProductDialog extends ConsumerStatefulWidget {
   final Product product;
@@ -39,9 +40,8 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
     _priceController = TextEditingController(text: widget.product.price.toString());
     _categoryController = TextEditingController(text: widget.product.category);
 
-    // Find the closest matching color index from the palette
-    final matchingIndex = AppColors.quickButtonPalette
-        .indexWhere((c) => c.toARGB32() == widget.product.quickButtonColor);
+    final matchingIndex = AppConstants.quickButtonPalette
+        .indexWhere((c) => c.toARGB32() == widget.product.quickButtonColor); // ← also updated here for consistency
     _selectedColorIndex = matchingIndex >= 0 ? matchingIndex : 0;
   }
 
@@ -53,26 +53,27 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
     super.dispose();
   }
 
-  /// Submit the form to update product.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
+    final isar = ref.read(isarProvider);
+
     try {
-      final productService = ref.read(productServiceProvider);
+      await isar.writeTxn(() async {
+        widget.product.name = _nameController.text.trim();
+        widget.product.price = double.parse(_priceController.text.trim());
+        widget.product.category = _categoryController.text.trim().isEmpty
+            ? 'General'
+            : _categoryController.text.trim();
+        widget.product.quickButtonColor = AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32(); // ← fixed deprecated .value
 
-      // Update the product properties
-      widget.product.name = _nameController.text.trim();
-      widget.product.price = double.parse(_priceController.text.trim());
-      widget.product.category = _categoryController.text.trim().isEmpty
-          ? 'General'
-          : _categoryController.text.trim();
-      widget.product.quickButtonColor = AppColors.quickButtonPalette[_selectedColorIndex].toARGB32();
+        await isar.products.put(widget.product);
+      });
 
-      await productService.updateProduct(widget.product);
+      if (!context.mounted) return;
 
-      if (!mounted) return;
       HapticFeedback.heavyImpact();
       Navigator.of(context).pop();
 
@@ -85,7 +86,7 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
         ),
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!context.mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -112,25 +113,16 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Title ──────────────────────────
               const Row(
                 children: [
                   Icon(Icons.edit_rounded, color: AppColors.primary, size: 24),
                   SizedBox(width: 10),
-                  Text(
-                    'Edit Product',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
+                  Text('Edit Product', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
                 ],
               ),
 
               const SizedBox(height: 20),
 
-              // ── Product Name ───────────────────
               _buildLabel('Product Name *'),
               const SizedBox(height: 6),
               TextFormField(
@@ -143,7 +135,6 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
 
               const SizedBox(height: 14),
 
-              // ── Price & Category row ───────────
               Row(
                 children: [
                   Expanded(
@@ -187,16 +178,15 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
 
               const SizedBox(height: 14),
 
-              // ── Color Picker ───────────────────
               _buildLabel('Button Color'),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: List.generate(
-                  AppColors.quickButtonPalette.length,
+                  AppConstants.quickButtonPalette.length,
                   (index) {
-                    final color = AppColors.quickButtonPalette[index];
+                    final color = AppConstants.quickButtonPalette[index];
                     final isSelected = _selectedColorIndex == index;
                     return GestureDetector(
                       onTap: () => setState(() => _selectedColorIndex = index),
@@ -212,12 +202,7 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
                             width: 3,
                           ),
                           boxShadow: isSelected
-                              ? [
-                                  BoxShadow(
-                                    color: color.withValues(alpha: 0.5),
-                                    blurRadius: 8,
-                                  ),
-                                ]
+                              ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 8)]
                               : null,
                         ),
                         child: isSelected
@@ -231,7 +216,6 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
 
               const SizedBox(height: 24),
 
-              // ── Action Buttons ─────────────────
               Row(
                 children: [
                   Expanded(
@@ -241,14 +225,9 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
                         foregroundColor: AppColors.textSecondary,
                         side: const BorderSide(color: AppColors.border),
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
-                      child: const Text(
-                        'Cancel',
-                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                      ),
+                      child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -260,27 +239,12 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
                         backgroundColor: AppColors.primary,
                         foregroundColor: AppColors.textOnPrimary,
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         elevation: 0,
                       ),
                       child: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: AppColors.textOnPrimary,
-                              ),
-                            )
-                          : const Text(
-                              'Save Changes',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
-                            ),
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.textOnPrimary))
+                          : const Text('Save Changes', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                     ),
                   ),
                 ],
@@ -292,41 +256,23 @@ class _EditProductDialogState extends ConsumerState<EditProductDialog> {
     );
   }
 
-  /// Reusable label text.
   Widget _buildLabel(String text) {
     return Text(
       text,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        color: AppColors.textSecondary,
-      ),
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
     );
   }
 
-  /// Reusable input decoration.
   InputDecoration _inputDecoration({required String hint}) {
     return InputDecoration(
       hintText: hint,
       hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 14),
       filled: true,
       fillColor: AppColors.surfaceBg,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primary, width: 2),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.danger),
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 2)),
+      errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.danger)),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
     );
   }
