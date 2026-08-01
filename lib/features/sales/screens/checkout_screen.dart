@@ -1,20 +1,25 @@
 /// ============================================
 /// Checkout Screen — ShopPOS
 /// ============================================
-/// Full-screen checkout route for payment processing.
-/// Supports Cash, MoMo, and Split Payments.
+/// Full-screen checkout route for payment
+/// processing. Supports Cash, MoMo, and Split.
+/// Uses [PaymentOptionButton] for method selection
+/// and [ContextExtension] for snackbars.
 /// ============================================
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/constants/app_constants.dart';
-import '../../../providers/cart_provider.dart';
-import '../../../providers/auth_provider.dart';
-import '../../../utils/currency_helpers.dart';
 
+import '../../../core/constants/app_constants.dart';
+import '../../../core/responsive/app_breakpoints.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/extensions/context_extensions.dart';
+import '../../../providers/auth_provider.dart';
+import '../../../providers/cart_provider.dart';
+import '../../../utils/currency_helpers.dart';
+import '../../common/widgets/payment_option_button.dart';
 
 class CheckoutScreen extends ConsumerStatefulWidget {
   const CheckoutScreen({super.key});
@@ -31,6 +36,14 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
   final TextEditingController _cashController = TextEditingController();
   final TextEditingController _momoController = TextEditingController();
 
+  /// Data-driven payment options — adding a new payment type requires
+  /// only one entry here, not changes to the rendering logic.
+  static const _paymentOptions = [
+    (type: AppConstants.paymentCash, icon: Icons.payments_rounded, label: 'Cash'),
+    (type: AppConstants.paymentMomo, icon: Icons.phone_android_rounded, label: 'MoMo'),
+    (type: AppConstants.paymentSplit, icon: Icons.call_split_rounded, label: 'Split'),
+  ];
+
   @override
   void dispose() {
     _cashController.dispose();
@@ -38,46 +51,37 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     super.dispose();
   }
 
-  /// Process the sale using the corrected CartNotifier
+  // ── Sale processing ───────────────────────────────────────────────
+
   Future<void> _processSale() async {
     if (_isProcessing) return;
 
     final total = ref.read(cartProvider.notifier).totalAmount;
 
-    double cashAmt = 0;
-    double momoAmt = 0;
-
+    // Validate split amounts sum to total
     if (_selectedPayment == AppConstants.paymentSplit) {
-      cashAmt = double.tryParse(_cashController.text.trim()) ?? 0;
-      momoAmt = double.tryParse(_momoController.text.trim()) ?? 0;
+      final cashAmt = double.tryParse(_cashController.text.trim()) ?? 0;
+      final momoAmt = double.tryParse(_momoController.text.trim()) ?? 0;
 
       if ((cashAmt + momoAmt - total).abs() > 0.01) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Split amounts must equal the total exactly.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        context.showErrorSnackbar('Split amounts must equal the total exactly.');
         return;
       }
-    } else if (_selectedPayment == AppConstants.paymentCash) {
-      cashAmt = total;
-    } else if (_selectedPayment == AppConstants.paymentMomo) {
-      momoAmt = total;
     }
 
     setState(() => _isProcessing = true);
 
     try {
       final currentUser = ref.read(currentUserProvider);
-      final cashierPin = currentUser?.pinHash ?? '1234'; // fallback for testing
+      final cashierPin =
+          currentUser?.pinHash ?? AppConstants.defaultOwnerPin;
 
-      final success = await ref.read(cartProvider.notifier).completeSale(
-            _selectedPayment,
-            cashierPin,
-          );
+      final success = await ref
+          .read(cartProvider.notifier)
+          .completeSale(_selectedPayment, cashierPin,
+              cashierId: currentUser?.id ?? 0);
 
-      if (!context.mounted) return;
+      if (!mounted) return;
 
       if (success) {
         HapticFeedback.heavyImpact();
@@ -86,35 +90,29 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
           _isProcessing = false;
         });
 
-        // Auto close after success
+        // Auto-close after the success animation
         await Future.delayed(const Duration(seconds: 2));
-        if (!context.mounted) return;
-        Navigator.of(context).pop(); // back to sales screen
+        if (!mounted) return;
+        Navigator.of(context).pop();
       } else {
         setState(() => _isProcessing = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to complete sale. Please try again.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        context.showErrorSnackbar(
+            'Failed to complete sale. Please try again.');
       }
     } catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       setState(() => _isProcessing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: AppColors.danger,
-        ),
-      );
+      context.showErrorSnackbar('Error: $e');
     }
   }
+
+  // ── Build ─────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final cartItems = ref.watch(cartProvider);
-    final total = ref.watch(cartProvider.notifier.select((notifier) => notifier.totalAmount));
+    final total = ref
+        .watch(cartProvider.notifier.select((n) => n.totalAmount));
 
     if (cartItems.isEmpty && !_showSuccessReceipt) {
       return Scaffold(
@@ -123,17 +121,20 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
       );
     }
 
+    final ctaPad = AppBreakpoints.ctaVerticalPadding(context);
+
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: _showSuccessReceipt 
-          ? null 
+      appBar: _showSuccessReceipt
+          ? null
           : AppBar(
-              title: const Text('Checkout', style: TextStyle(fontWeight: FontWeight.bold)),
+              title: const Text('Checkout',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
               backgroundColor: AppColors.cardBg,
             ),
       body: Stack(
         children: [
-          // Main Content
+          // ── Main content ──────────────────────────────────────────
           SafeArea(
             child: Column(
               children: [
@@ -143,96 +144,112 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Grand Total
+                        // ── Grand total display ───────────────────
                         Center(
                           child: Column(
                             children: [
                               const Text(
                                 'Grand Total',
-                                style: TextStyle(color: AppColors.textSecondary, fontSize: 16),
+                                style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 16),
                               ),
                               const SizedBox(height: 8),
-                              Text(
-                                CurrencyHelpers.format(total),
-                                style: const TextStyle(
-                                  color: AppColors.primary,
-                                  fontSize: 40,
-                                  fontWeight: FontWeight.w900,
-                                ),
+                              // FittedBox prevents the large price from
+                              // overflowing on small or high-dpi screens.
+                              LayoutBuilder(
+                                builder: (context, constraints) {
+                                  return SizedBox(
+                                    width: constraints.maxWidth,
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
+                                        CurrencyHelpers.format(total),
+                                        style: const TextStyle(
+                                          color: AppColors.primary,
+                                          fontSize: 40,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),
                         ),
+
                         const SizedBox(height: 30),
 
-                        // Items Summary
+                        // ── Items summary ─────────────────────────
                         const Text(
                           'Items Summary',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textPrimary),
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: AppColors.textPrimary),
                         ),
                         const SizedBox(height: 12),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceBg,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: AppColors.border),
-                          ),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: cartItems.length,
-                            separatorBuilder: (_, __) => const Divider(color: AppColors.border, height: 1),
-                            itemBuilder: (ctx, i) {
-                              final item = cartItems[i];
-                              return ListTile(
-                                dense: true,
-                                title: Text(item.product.name, style: const TextStyle(color: AppColors.textPrimary)),
-                                subtitle: Text(
-                                  '${CurrencyHelpers.format(item.product.price)} × ${item.quantity}',
-                                  style: const TextStyle(color: AppColors.textSecondary),
-                                ),
-                                trailing: Text(
-                                  CurrencyHelpers.format(item.subtotal),
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 14),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
+                        _buildItemsSummary(cartItems),
 
                         const SizedBox(height: 30),
 
-                        // Payment Method
+                        // ── Payment method selection ───────────────
                         const Text(
                           'Payment Method',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textPrimary),
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: AppColors.textPrimary),
                         ),
                         const SizedBox(height: 12),
+
+                        // Data-driven row of PaymentOptionButtons
                         Row(
-                          children: [
-                            Expanded(child: _buildPaymentOption(AppConstants.paymentCash, Icons.payments_rounded, 'Cash')),
-                            const SizedBox(width: 12),
-                            Expanded(child: _buildPaymentOption(AppConstants.paymentMomo, Icons.phone_android_rounded, 'MoMo')),
-                            const SizedBox(width: 12),
-                            Expanded(child: _buildPaymentOption(AppConstants.paymentSplit, Icons.call_split_rounded, 'Split')),
-                          ],
+                          children: _paymentOptions.map((opt) {
+                            return Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.only(
+                                  right: opt == _paymentOptions.last
+                                      ? 0
+                                      : 12,
+                                ),
+                                child: PaymentOptionButton(
+                                  type: opt.type,
+                                  icon: opt.icon,
+                                  label: opt.label,
+                                  isSelected:
+                                      _selectedPayment == opt.type,
+                                  onTap: () {
+                                    HapticFeedback.lightImpact();
+                                    setState(() =>
+                                        _selectedPayment = opt.type);
+                                  },
+                                ),
+                              ),
+                            );
+                          }).toList(),
                         ),
 
-                        // Split Payment Inputs
-                        if (_selectedPayment == AppConstants.paymentSplit) ...[
+                        // ── Split amount fields ───────────────────
+                        if (_selectedPayment ==
+                            AppConstants.paymentSplit) ...[
                           const SizedBox(height: 20),
                           Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
                               color: AppColors.cardBg,
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: AppColors.border),
+                              border:
+                                  Border.all(color: AppColors.border),
                             ),
                             child: Column(
                               children: [
-                                _buildSplitField('Cash Amount', _cashController),
+                                _buildSplitField(
+                                    'Cash Amount', _cashController),
                                 const SizedBox(height: 12),
-                                _buildSplitField('MoMo Amount', _momoController),
+                                _buildSplitField(
+                                    'MoMo Amount', _momoController),
                               ],
                             ),
                           ),
@@ -242,130 +259,170 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                   ),
                 ),
 
-                // Complete Sale Button
+                // ── Complete sale CTA ─────────────────────────────
+                // Padding shrinks in landscape to recover vertical space.
                 Container(
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.all(ctaPad),
                   decoration: const BoxDecoration(
                     color: AppColors.cardBg,
-                    border: Border(top: BorderSide(color: AppColors.border)),
+                    border: Border(
+                        top: BorderSide(color: AppColors.border)),
                   ),
-                  child: ElevatedButton(
-                    onPressed: _isProcessing ? null : _processSale,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      minimumSize: const Size(double.infinity, 60),
+                  child: SafeArea(
+                    top: false,
+                    child: ElevatedButton(
+                      onPressed: _isProcessing ? null : _processSale,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.success,
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                        minimumSize: const Size(double.infinity, 56),
+                      ),
+                      child: _isProcessing
+                          ? const CircularProgressIndicator(
+                              color: Colors.white)
+                          : const Text(
+                              'COMPLETE SALE',
+                              style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.5,
+                                  color: Colors.white),
+                            ),
                     ),
-                    child: _isProcessing
-                        ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text(
-                            'COMPLETE SALE',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.white),
-                          ),
                   ),
                 ),
               ],
             ),
           ),
 
-          // Success Receipt Overlay
-          if (_showSuccessReceipt)
-            Positioned.fill(
-              child: Container(
-                color: AppColors.scaffoldBg,
-                child: Center(
-                  child: TweenAnimationBuilder<double>(
-                    duration: const Duration(milliseconds: 600),
-                    curve: Curves.elasticOut,
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    builder: (context, value, child) {
-                      return Transform.scale(
-                        scale: value,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 100,
-                              height: 100,
-                              decoration: const BoxDecoration(
-                                color: AppColors.success,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.check_rounded, color: Colors.white, size: 60),
-                            ),
-                            const SizedBox(height: 24),
-                            const Text(
-                              'Payment Successful!',
-                              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                            ),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'Receipt saved and stock deducted.',
-                              style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
+          // ── Success overlay ───────────────────────────────────────
+          if (_showSuccessReceipt) _buildSuccessOverlay(),
         ],
       ),
     );
   }
 
-  Widget _buildSplitField(String label, TextEditingController controller) {
+  // ── Private helper builders ───────────────────────────────────────
+
+  Widget _buildItemsSummary(List<CartItem> cartItems) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: cartItems.length,
+        separatorBuilder: (_, __) =>
+            const Divider(color: AppColors.border, height: 1),
+        itemBuilder: (_, i) {
+          final item = cartItems[i];
+          return ListTile(
+            dense: true,
+            title: Text(item.product.name,
+                style:
+                    const TextStyle(color: AppColors.textPrimary)),
+            subtitle: Text(
+              '${CurrencyHelpers.format(item.product.price)} × ${item.quantity}',
+              style:
+                  const TextStyle(color: AppColors.textSecondary),
+            ),
+            trailing: Text(
+              CurrencyHelpers.format(item.subtotal),
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                  fontSize: 14),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSplitField(
+      String label, TextEditingController controller) {
     return TextField(
       controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      keyboardType:
+          const TextInputType.numberWithOptions(decimal: true),
       style: const TextStyle(color: AppColors.textPrimary),
       decoration: InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: AppColors.textMuted),
         prefixText: '${AppConstants.currencySymbol} ',
-        prefixStyle: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+        prefixStyle: const TextStyle(
+            color: AppColors.textPrimary, fontWeight: FontWeight.bold),
         filled: true,
         fillColor: AppColors.surfaceBg,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        border:
+            OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
 
-  Widget _buildPaymentOption(String type, IconData icon, String label) {
-    final isSelected = _selectedPayment == type;
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.lightImpact();
-        setState(() => _selectedPayment = type);
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary.withValues(alpha: 0.1) : AppColors.surfaceBg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isSelected ? AppColors.primary : AppColors.border,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: isSelected ? AppColors.primary : AppColors.textSecondary, size: 28),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? AppColors.primary : AppColors.textSecondary,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+  Widget _buildSuccessOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: AppColors.scaffoldBg,
+        child: Center(
+          child: TweenAnimationBuilder<double>(
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.elasticOut,
+            tween: Tween(begin: 0.0, end: 1.0),
+            builder: (context, value, _) => Transform.scale(
+              scale: value,
+              child: const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _SuccessIcon(),
+                  SizedBox(height: 24),
+                  Text(
+                    'Payment Successful!',
+                    style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Receipt saved and stock deducted.',
+                    style: TextStyle(
+                        fontSize: 16, color: AppColors.textSecondary),
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// Encapsulated success icon widget — size is driven by screen size
+/// so it stays proportional in landscape on short devices.
+class _SuccessIcon extends StatelessWidget {
+  const _SuccessIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    // Cap the icon at 100 dp but shrink proportionally on short screens
+    final size = (MediaQuery.sizeOf(context).shortestSide * 0.22)
+        .clamp(64.0, 100.0);
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        color: AppColors.success,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(Icons.check_rounded,
+          color: Colors.white, size: size * 0.6),
     );
   }
 }

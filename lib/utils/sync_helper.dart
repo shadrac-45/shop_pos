@@ -15,16 +15,15 @@ class SyncHelper {
     final isar = ref.read(isarProvider);
     final pendingSales = await isar.sales
         .filter()
-        .timestampGreaterThan(DateTime.now().subtract(const Duration(days: 7)))
+        .isSyncedEqualTo(false)
         .findAll();
 
-    print('SyncHelper: ${pendingSales.length} sales ready for sync (placeholder)');
+    // Pending sales ready for cloud sync
+    if (pendingSales.isEmpty) return;
   }
 
   /// Placeholder for product sync
-  Future<void> syncProducts() async {
-    print('SyncHelper: Product sync called (placeholder)');
-  }
+  Future<void> syncProducts() async {}
 
   /// Check if device is online (placeholder)
   Future<bool> isOnline() async {

@@ -6,8 +6,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import '../../../core/responsive/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/extensions/context_extensions.dart';
 import '../../../models/product.dart';
 import '../../../models/batch.dart';
 import '../../../providers/auth_provider.dart';
@@ -81,31 +83,18 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
 
         // Fixed: Use the correct Isar-generated collection accessor
         await isar.batchs.put(newBatch);
+        newBatch.product.value = widget.product;
+        await newBatch.product.save();
       });
 
-      if (!context.mounted) return;
+      if (!mounted) return;
 
       HapticFeedback.heavyImpact();
       Navigator.of(context).pop();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${widget.product.name} restocked successfully!'),
-          backgroundColor: AppColors.success,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
+      context.showSuccessSnackbar('${widget.product.name} restocked successfully!');
     } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: AppColors.danger,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
+      if (!mounted) return;
+      context.showErrorSnackbar('Error: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -202,10 +191,13 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final horizontalInset = AppBreakpoints.dialogHorizontalInset(screenWidth);
+
     return Dialog(
       backgroundColor: AppColors.cardBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+      insetPadding: EdgeInsets.symmetric(horizontal: horizontalInset, vertical: 40),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Form(

@@ -5,6 +5,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
+
 class AppConstants {
   AppConstants._();
 
@@ -43,16 +45,24 @@ class AppConstants {
   // ── Backend ─────────────────────────────────
   static const String backendBaseUrl = 'http://10.0.2.2:3000/api';
 
-  // ── UI Palette (must match product buttons) ─
-  static const List<Color> quickButtonPalette = [
-    Color(0xFF4CAF50), // green
-    Color(0xFF2196F3), // blue
-    Color(0xFFFF9800), // orange
-    Color(0xFF9C27B0), // purple
-    Color(0xFFF44336), // red
-    Color(0xFF00BCD4), // cyan
-  ];
+  // ── UI Palette (delegated to AppColors for single source of truth) ─
+  static List<Color> get quickButtonPalette => AppColors.quickButtonPalette;
 
   // ── Demo only (in production, use hashed PINs)
   static const String defaultOwnerPin = '1234';
+
+  // ── Paystack Ghana MoMo Payment ─────────────
+  /// Payment type stored on Sale for Paystack mobile money charges.
+  static const String paymentMomoPaystack = 'mobile_money';
+
+  /// Ghana MoMo provider codes as required by Paystack Charge API.
+  static const String momoProviderMtn = 'mtn';
+  static const String momoProviderVodafone = 'vod';
+  static const String momoProviderAirtelTigo = 'tgo';
+
+  /// How often (seconds) the app polls the backend to check payment status.
+  static const int momoPollingIntervalSec = 5;
+
+  /// Maximum seconds to wait before declaring the payment timed out.
+  static const int momoTimeoutSec = 90;
 }
