@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>ShopPOS — Orders</title>
+  <meta name="description" content="ShopPOS order history and transaction records"/>
+  <link rel="stylesheet" href="css/styles.css"/>
+</head>
+<body>
+
+<div id="toast-container" class="toast-container"></div>
+
+<div class="app-shell">
+
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <a href="index.html" class="topbar-brand">
+      <div class="topbar-logo">
+        <span class="material-symbols-outlined" style="font-size:20px;color:#fff">storefront</span>
+      </div>
+      <span class="topbar-name">ShopPOS</span>
+    </a>
+    <div class="topbar-right">
+      <button id="theme-toggle" class="theme-toggle"></button>
+      <span class="cashier-badge">Cashier</span>
+    </div>
+  </header>
+
+  <div class="main-area">
+
+    <!-- Sidebar nav -->
+    <nav class="sidebar">
+      <a href="index.html" class="nav-item" data-page="pos">
+        <span class="material-symbols-outlined nav-icon">point_of_sale</span><span>Sale</span>
+      </a>
+      <a href="orders.html" class="nav-item" data-page="orders">
+        <span class="material-symbols-outlined nav-icon">receipt_long</span><span>Orders</span>
+      </a>
+      <a href="stock.html" class="nav-item" data-page="stock">
+        <span class="material-symbols-outlined nav-icon">inventory_2</span><span>Stock</span>
+      </a>
+      <a href="admin.html" class="nav-item" data-page="admin">
+        <span class="material-symbols-outlined nav-icon">bar_chart</span><span>Reports</span>
+      </a>
+    </nav>
+
+    <div class="page-content">
+
+      <!-- Page header -->
+      <div class="page-header">
+        <div>
+          <h1>Orders</h1>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px" id="order-summary-label"></div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-ghost btn-sm" onclick="exportCSV()">
+            <span class="material-symbols-outlined" style="font-size:16px">download</span> Export CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div style="padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;gap:12px;flex-wrap:wrap;flex-shrink:0;transition:background var(--t),border-color var(--t)">
+        <div class="search-bar" style="flex:1;min-width:200px;max-width:400px;height:38px">
+          <span class="material-symbols-outlined">search</span>
+          <input id="orders-search" type="text" placeholder="Search orders, items, payment…"/>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="material-symbols-outlined" style="color:var(--text-muted);font-size:18px">calendar_month</span>
+          <input id="date-filter" type="date" class="input-field" style="height:38px;width:160px;font-size:13px"/>
+          <button class="btn btn-ghost btn-sm" onclick="clearDateFilter()" title="Clear date filter">
+            <span class="material-symbols-outlined" style="font-size:16px">close</span>
+          </button>
+        </div>
+        <!-- Payment filter pills -->
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="pill active" id="pay-all"    onclick="filterByPayment('all')">All</button>
+          <button class="pill"        id="pay-cash"   onclick="filterByPayment('Cash')">💵 Cash</button>
+          <button class="pill"        id="pay-card"   onclick="filterByPayment('Card')">💳 Card</button>
+          <button class="pill"        id="pay-mobile" onclick="filterByPayment('Mobile Pay')">📱 Mobile</button>
+        </div>
+      </div>
+
+      <!-- Orders list -->
+      <div class="page-scroll">
+        <div id="orders-list" style="display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Bottom nav (mobile) -->
+  <nav class="bottom-nav">
+    <a href="index.html" class="bottom-nav-item" data-page="pos">
+      <span class="material-symbols-outlined nav-icon">point_of_sale</span><span>Sale</span>
+    </a>
+    <a href="orders.html" class="bottom-nav-item" data-page="orders">
+      <span class="material-symbols-outlined nav-icon">receipt_long</span><span>Orders</span>
+    </a>
+    <a href="stock.html" class="bottom-nav-item" data-page="stock">
+      <span class="material-symbols-outlined nav-icon">inventory_2</span><span>Stock</span>
+    </a>
+    <a href="admin.html" class="bottom-nav-item" data-page="admin">
+      <span class="material-symbols-outlined nav-icon">bar_chart</span><span>Reports</span>
+    </a>
+  </nav>
+</div>
+
+<script src="js/app.js"></script>
+<script src="js/orders.js"></script>
+</body>
+</html>
