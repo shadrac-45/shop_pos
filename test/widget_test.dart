@@ -1,4 +1,4 @@
-// ============================================
+﻿// ============================================
 // Widget Test — ShopPOS
 // ============================================
 // Basic test to verify app initialization.
@@ -7,10 +7,10 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
-import 'package:shop_pos/utils/hash_helpers.dart';
-import 'package:shop_pos/utils/currency_helpers.dart';
-import 'package:shop_pos/utils/expiry_helpers.dart';
-import 'package:shop_pos/services/paystack_service.dart';
+import 'package:shop_pos/core/utils/hash_helpers.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/core/utils/expiry_helpers.dart';
+import 'package:shop_pos/features/sales/services/paystack_service.dart';
 
 void main() {
   testWidgets('ShopPOS app should render basic widget structure', (tester) async {
@@ -38,11 +38,11 @@ void main() {
       expect(hash1.length, 64); // Hex SHA-256 length
     });
 
-    test('verifyPin accepts both hashed and raw fallback PINs', () {
+    test('verifyPin correctly matches hashed PIN and rejects raw string', () {
       final hashedOwner = HashHelpers.hashPin('1234');
       expect(HashHelpers.verifyPin('1234', hashedOwner), isTrue);
       expect(HashHelpers.verifyPin('9999', hashedOwner), isFalse);
-      expect(HashHelpers.verifyPin('1234', '1234'), isTrue); // Legacy fallback
+      expect(HashHelpers.verifyPin('1234', '1234'), isFalse); // Raw plaintext string is rejected
     });
   });
 

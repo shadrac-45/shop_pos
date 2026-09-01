@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Add Cashier Dialog — ShopPOS
 /// ============================================
 /// Owner-only dialog to create a new cashier account.
@@ -12,9 +12,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../providers/staff_provider.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/settings/providers/staff_provider.dart';
 
 class AddCashierDialog extends ConsumerStatefulWidget {
   const AddCashierDialog({super.key});
@@ -109,6 +109,13 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
         setState(() {
           _pinError = 'PIN must be 4 to 6 digits';
         });
+      case StaffOperationResult.unauthorized:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unauthorized: Only the shop owner can create staff accounts.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
       case StaffOperationResult.weakPin:
       case StaffOperationResult.userNotFound:
       case StaffOperationResult.error:

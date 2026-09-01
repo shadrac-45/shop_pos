@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Settings Screen — ShopPOS
 /// ============================================
 /// Clean, end-user facing screen for Cashiers and Owners.
@@ -19,16 +19,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/constants/app_constants.dart';
-import '../../../core/extensions/context_extensions.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../providers/auth_provider.dart';
-import '../../auth/screens/login_screen.dart';
-import '../../common/widgets/touchable_card.dart';
-import '../widgets/change_pin_dialog.dart';
-import 'developer_debug_screen.dart';
-import 'manage_staff_screen.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/auth/screens/login_screen.dart';
+import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
+import 'package:shop_pos/features/settings/screens/developer_debug_screen.dart';
+import 'package:shop_pos/features/settings/screens/manage_staff_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});

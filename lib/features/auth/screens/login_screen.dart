@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Login Screen — ShopPOS
 /// ============================================
 /// Single, unified PIN-based authentication.
@@ -13,14 +13,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../core/constants/app_assets.dart';
-import '../../../core/extensions/context_extensions.dart';
-import '../../../core/responsive/app_breakpoints.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../providers/auth_provider.dart';
-import '../../main/screens/main_shell_screen.dart';
+import 'package:shop_pos/core/constants/app_assets.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/responsive/app_breakpoints.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/main/screens/main_shell_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -30,16 +31,50 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
+  // ── Persistent Lockout Security State ──────────────────────────
+  // Counts and lockout expiry are persisted to SharedPreferences so that
+  // closing and re-opening the app cannot bypass the lockout window.
+  static const _kFailedAttemptsKey = 'login_failed_attempts';
+  static const _kLockoutExpiryKey  = 'login_lockout_expiry_ms';
+
   // ── PIN Entry State ─────────────────────────────────────
   final List<String> _pin = List.filled(4, '');
   int _currentIndex = 0;
   bool _isAuthenticating = false;
 
-  // ── Lockout Security State ──────────────────────────────
   int _failedAttempts = 0;
   bool _isLockedOut = false;
   int _lockoutSeconds = 0;
   Timer? _lockoutTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreLockoutState();
+  }
+
+  /// On startup, check if a lockout is still active from a previous session.
+  Future<void> _restoreLockoutState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final expiryMs = prefs.getInt(_kLockoutExpiryKey) ?? 0;
+    final remaining = expiryMs - DateTime.now().millisecondsSinceEpoch;
+    if (remaining > 0) {
+      final remainingSecs = (remaining / 1000).ceil();
+      if (!mounted) return;
+      setState(() {
+        _failedAttempts = prefs.getInt(_kFailedAttemptsKey) ?? 3;
+        _lockoutSeconds = remainingSecs;
+        _isLockedOut = true;
+        _pin.fillRange(0, 4, '');
+        _currentIndex = 0;
+      });
+      _resumeLockoutCountdown();
+    } else {
+      // Lockout has expired — clear stored state.
+      await prefs.remove(_kLockoutExpiryKey);
+      await prefs.remove(_kFailedAttemptsKey);
+    }
+  }
 
   @override
   void dispose() {
@@ -47,16 +82,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  void _startLockoutTimer() {
+  /// Starts a new 30-second lockout and persists it so app restarts can't bypass it.
+  Future<void> _startLockoutTimer() async {
+    final expiryMs = DateTime.now().millisecondsSinceEpoch + 30000;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kLockoutExpiryKey, expiryMs);
+    await prefs.setInt(_kFailedAttemptsKey, _failedAttempts);
+
     setState(() {
       _isLockedOut = true;
       _lockoutSeconds = 30;
       _pin.fillRange(0, 4, '');
       _currentIndex = 0;
     });
+    _resumeLockoutCountdown();
+  }
 
+  /// Ticks down _lockoutSeconds and clears the lockout when it reaches zero.
+  void _resumeLockoutCountdown() {
     _lockoutTimer?.cancel();
-    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) return;
       setState(() {
         if (_lockoutSeconds > 1) {
@@ -68,6 +113,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           timer.cancel();
         }
       });
+      if (!_isLockedOut) {
+        // Clear persisted lockout once it expires.
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_kLockoutExpiryKey);
+        await prefs.remove(_kFailedAttemptsKey);
+      }
     });
   }
 
@@ -118,6 +169,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         if (user != null) {
           HapticFeedback.mediumImpact();
           setState(() => _failedAttempts = 0);
+          // Clear any residual persisted attempt count on successful login.
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove(_kFailedAttemptsKey);
+          await prefs.remove(_kLockoutExpiryKey);
+          if (!mounted) return;
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const MainShellScreen()),
@@ -143,7 +199,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         });
 
         if (_failedAttempts >= 3) {
-          _startLockoutTimer();
+          await _startLockoutTimer();
+          if (!mounted) return;
           context.showErrorSnackbar(
             'Too many failed attempts. Keypad locked for 30s.',
           );

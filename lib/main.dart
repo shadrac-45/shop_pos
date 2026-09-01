@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -6,15 +6,15 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'models/app_user.dart';
-import 'models/batch.dart';
-import 'models/product.dart';
-import 'models/sale.dart';
-import 'core/theme/app_theme.dart';
-import 'features/auth/screens/login_screen.dart';
-import 'providers/database_provider.dart';
-import 'providers/notification_provider.dart';
-import 'utils/hash_helpers.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
+import 'package:shop_pos/features/products/models/batch.dart';
+import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/sales/models/sale.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
+import 'package:shop_pos/features/auth/screens/login_screen.dart';
+import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/services/notification_service.dart';
+import 'package:shop_pos/core/utils/hash_helpers.dart';
 
 void main() {
   // Catch all uncaught async errors in the Zone — prevents silent blank screens
@@ -107,8 +107,10 @@ Future<void> _seedDefaultUsers(Isar isar) async {
     }
   }
 
-  // 2. Guarantee Cashier account
-  var cashier = await isar.appUsers.filter().roleEqualTo('cashier').findFirst();
+  // 2. Guarantee Cashier account only on first run.
+  // Do NOT touch isActive on an existing cashier — the Owner may have
+  // deliberately deactivated them and we must respect that decision.
+  final cashier = await isar.appUsers.filter().roleEqualTo('cashier').findFirst();
   if (cashier == null) {
     final newCashier = AppUser()
       ..name = 'Cashier'
@@ -118,14 +120,6 @@ Future<void> _seedDefaultUsers(Isar isar) async {
     await isar.writeTxn(() async {
       await isar.appUsers.put(newCashier);
     });
-  } else {
-    final c = cashier;
-    if (!c.isActive) {
-      c.isActive = true;
-      await isar.writeTxn(() async {
-        await isar.appUsers.put(c);
-      });
-    }
   }
 }
 

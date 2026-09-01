@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Owner Products Screen — ShopPOS
 /// ============================================
 /// Touch-first product management interface:
@@ -12,21 +12,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/responsive/app_breakpoints.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../models/product.dart';
-import '../../../providers/auth_provider.dart';
-import '../../../providers/product_provider.dart';
-import '../../../utils/currency_helpers.dart';
-import '../../../utils/date_helpers.dart';
-import '../../../utils/expiry_helpers.dart';
-import '../../common/widgets/add_product_dialog.dart';
-import '../../common/widgets/app_empty_state.dart';
-import '../../common/widgets/app_skeleton.dart';
-import '../../common/widgets/edit_product_dialog.dart';
-import '../../common/widgets/restock_batch_dialog.dart';
-import '../../common/widgets/touchable_card.dart';
+import 'package:shop_pos/core/responsive/app_breakpoints.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/products/providers/product_provider.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/core/utils/date_helpers.dart';
+import 'package:shop_pos/core/utils/expiry_helpers.dart';
+import 'package:shop_pos/features/products/widgets/add_product_dialog.dart';
+import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
+import 'package:shop_pos/features/shared/widgets/app_skeleton.dart';
+import 'package:shop_pos/features/products/widgets/edit_product_dialog.dart';
+import 'package:shop_pos/features/products/widgets/restock_batch_dialog.dart';
+import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 
 class OwnerProductsScreen extends ConsumerStatefulWidget {
   const OwnerProductsScreen({super.key});

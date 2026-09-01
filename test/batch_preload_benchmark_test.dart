@@ -1,11 +1,11 @@
-import 'dart:ffi';
+﻿import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:isar/isar.dart';
-import 'package:shop_pos/models/product.dart';
-import 'package:shop_pos/models/batch.dart';
-import 'package:shop_pos/models/sale.dart';
-import 'package:shop_pos/models/app_user.dart';
+import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/products/models/batch.dart';
+import 'package:shop_pos/features/sales/models/sale.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

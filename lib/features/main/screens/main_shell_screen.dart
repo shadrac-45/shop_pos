@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Main Shell Screen — ShopPOS
 /// ============================================
 /// Navigation shell that switches between the
@@ -13,15 +13,15 @@ library;
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/constants/app_assets.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../providers/auth_provider.dart';
-import '../../auth/screens/login_screen.dart';
-import '../../products/screens/owner_products_screen.dart';
-import '../../reports/screens/daily_report_screen.dart';
-import '../../sales/screens/cashier_sales_screen.dart';
-import '../../settings/screens/settings_screen.dart';
+import 'package:shop_pos/core/constants/app_assets.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/auth/screens/login_screen.dart';
+import 'package:shop_pos/features/products/screens/owner_products_screen.dart';
+import 'package:shop_pos/features/reports/screens/daily_report_screen.dart';
+import 'package:shop_pos/features/sales/screens/cashier_sales_screen.dart';
+import 'package:shop_pos/features/settings/screens/settings_screen.dart';
 
 class _NavDestination {
   final String label;

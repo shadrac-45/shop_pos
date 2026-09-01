@@ -11,9 +11,15 @@ rootProject.layout.buildDirectory.value(newBuildDir)
 subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
+}
 
-    afterEvaluate {
-        project.extensions.findByName("android")?.let { androidExt ->
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+subprojects {
+    val configureAndroid: Project.() -> Unit = {
+        extensions.findByName("android")?.let { androidExt ->
             try {
                 val namespaceMethod = androidExt.javaClass.getMethod("getNamespace")
                 val currentNamespace = namespaceMethod.invoke(androidExt) as? String
@@ -33,6 +39,14 @@ subprojects {
             } catch (e: Exception) {
                 // Ignore reflection or resolution errors
             }
+        }
+    }
+
+    if (state.executed) {
+        configureAndroid()
+    } else {
+        afterEvaluate {
+            configureAndroid()
         }
     }
 }

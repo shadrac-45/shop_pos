@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Manage Staff Screen — ShopPOS
 /// ============================================
 /// Owner-only screen for creating, viewing, and
@@ -11,14 +11,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../models/app_user.dart';
-import '../../../providers/staff_provider.dart';
-import '../../../core/extensions/context_extensions.dart';
-import '../../common/widgets/touchable_card.dart';
-import '../widgets/add_cashier_dialog.dart';
-import '../widgets/reset_pin_dialog.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
+import 'package:shop_pos/features/settings/providers/staff_provider.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/settings/widgets/add_cashier_dialog.dart';
+import 'package:shop_pos/features/settings/widgets/reset_pin_dialog.dart';
 
 class ManageStaffScreen extends ConsumerStatefulWidget {
   const ManageStaffScreen({super.key});

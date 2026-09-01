@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Checkout Screen — ShopPOS
 /// ============================================
 /// Full-screen checkout route for payment
@@ -12,14 +12,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/constants/app_constants.dart';
-import '../../../core/responsive/app_breakpoints.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/extensions/context_extensions.dart';
-import '../../../providers/auth_provider.dart';
-import '../../../providers/cart_provider.dart';
-import '../../../utils/currency_helpers.dart';
-import '../../common/widgets/payment_option_button.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/responsive/app_breakpoints.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/sales/providers/cart_provider.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/features/sales/widgets/payment_option_button.dart';
 
 class CheckoutScreen extends ConsumerStatefulWidget {
   const CheckoutScreen({super.key});
@@ -73,12 +73,10 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
 
     try {
       final currentUser = ref.read(currentUserProvider);
-      final cashierPin =
-          currentUser?.pinHash ?? AppConstants.defaultOwnerPin;
 
       final success = await ref
           .read(cartProvider.notifier)
-          .completeSale(_selectedPayment, cashierPin,
+          .completeSale(_selectedPayment,
               cashierId: currentUser?.id ?? 0);
 
       if (!mounted) return;

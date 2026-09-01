@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Mobile Money (MoMo) Payment Screen — ShopPOS
 /// ============================================
 /// Implements Paystack Ghana Push-Payment Flow:
@@ -15,14 +15,14 @@ import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../../core/constants/app_constants.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/extensions/context_extensions.dart';
-import '../../../models/paystack_models.dart';
-import '../../../providers/auth_provider.dart';
-import '../../../providers/cart_provider.dart';
-import '../../../services/paystack_service.dart';
-import '../../../utils/currency_helpers.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/features/sales/models/paystack_models.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/sales/providers/cart_provider.dart';
+import 'package:shop_pos/features/sales/services/paystack_service.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
 
 enum MomoFlowStep {
   form,
@@ -186,7 +186,6 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
     final currentUser = ref.read(currentUserProvider);
 
     final success = await cartNotifier.completeSaleMomo(
-      cashierPin: currentUser?.pinHash ?? AppConstants.defaultOwnerPin,
       paystackReference: reference,
       provider: _selectedProvider,
       phone: normaliseGhanaPhone(_phoneController.text.trim()) ?? _phoneController.text.trim(),

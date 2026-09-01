@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Developer & Debug Panel — ShopPOS
 /// ============================================
 /// Dedicated diagnostic and configuration screen for
@@ -12,12 +12,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/extensions/context_extensions.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../providers/backend_config_provider.dart';
-import '../../../services/paystack_service.dart';
-import '../../common/widgets/touchable_card.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/settings/providers/backend_config_provider.dart';
+import 'package:shop_pos/features/sales/services/paystack_service.dart';
+import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 
 class DeveloperDebugScreen extends ConsumerStatefulWidget {
   const DeveloperDebugScreen({super.key});

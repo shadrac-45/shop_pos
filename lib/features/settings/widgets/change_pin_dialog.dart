@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Change PIN Dialog — ShopPOS
 /// ============================================
 /// Allows any logged-in staff member (Owner or Cashier)
@@ -12,12 +12,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../models/app_user.dart';
-import '../../../providers/auth_provider.dart';
-import '../../../providers/staff_provider.dart';
-import '../../../utils/hash_helpers.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/settings/providers/staff_provider.dart';
+import 'package:shop_pos/core/utils/hash_helpers.dart';
 
 class ChangePinDialog extends ConsumerStatefulWidget {
   final AppUser user;

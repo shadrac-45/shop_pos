@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// Daily Report Screen — ShopPOS
 /// ============================================
 /// Owner-only analytics dashboard with 5 sections:
@@ -17,18 +17,18 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:isar/isar.dart';
 
-import '../../../core/extensions/context_extensions.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_spacing.dart';
-import '../../../models/app_user.dart';
-import '../../../models/sale.dart';
-import '../../../services/report_aggregator.dart';
-import '../../../providers/database_provider.dart';
-import '../../../providers/report_provider.dart';
-import '../../../utils/currency_helpers.dart';
-import '../../../utils/date_helpers.dart';
-import '../../common/widgets/app_empty_state.dart';
-import '../../common/widgets/touchable_card.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
+import 'package:shop_pos/features/sales/models/sale.dart';
+import 'package:shop_pos/features/reports/services/report_aggregator.dart';
+import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/features/reports/providers/report_provider.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/core/utils/date_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
+import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 
 class DailyReportScreen extends ConsumerStatefulWidget {
   const DailyReportScreen({super.key});

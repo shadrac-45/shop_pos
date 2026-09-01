@@ -1,4 +1,4 @@
-/// ============================================
+﻿/// ============================================
 /// App Theme — ShopPOS
 /// ============================================
 /// Touch-first light off-white & emerald theme
@@ -8,8 +8,8 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'app_colors.dart';
-import 'app_spacing.dart';
+import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_spacing.dart';
 
 class AppTheme {
   AppTheme._();
