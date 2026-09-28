@@ -1,37 +1,37 @@
 /// ============================================
-/// CSV Import Dialog — ShopPOS
+/// Import Products Screen — ShopPOS
 /// ============================================
-/// Full-screen, touch-first import surface for the
-/// product catalog. Two tabs: pick a CSV/Excel file,
-/// or paste CSV text directly.
+/// Full-screen import surface for the product catalog.
 ///
-/// Layout note: the preview table lives *inside* each tab's
-/// scroll view rather than as a second Expanded sibling of
-/// the TabBarView. Two Expanded widgets in one Column is an
-/// unsatisfiable constraint and was what pushed the AppBar
-/// title into the Import button and close button.
+/// This file is presentation only. All parsing, validation and Isar work
+/// stays in `CsvImportService` / `ProductImportParser`; the screen is a
+/// switch on [ImportStatus] and every widget below it is stateless. All
+/// state lives in `importProductsProvider`.
 ///
-/// Import is restricted to the OWNER role; staff accounts
-/// see a read-only explanation instead of the tabs.
-/// ============================================
+/// Layout: the Scaffold AppBar owns the status bar inset. The sticky
+/// action bar is a sibling at the bottom of the body — never an AppBar
+/// action — and wraps itself in SafeArea so it always clears the system
+/// navigation bar. Exactly one [Expanded] holds the scrolling content.
+///
+/// Import is restricted to the OWNER role.
 library;
 
-import 'dart:async';
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
-import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
-import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/products/providers/import_products_provider.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
-import 'package:shop_pos/features/products/services/csv_import_service.dart';
+import 'package:shop_pos/features/products/services/invalid_rows_export.dart';
+import 'package:shop_pos/features/products/widgets/column_mapping_dialog.dart';
+import 'package:shop_pos/features/products/widgets/import/import_action_bar.dart';
+import 'package:shop_pos/features/products/widgets/import/import_file_card.dart';
+import 'package:shop_pos/features/products/widgets/import/import_filter_bar.dart';
+import 'package:shop_pos/features/products/widgets/import/import_row_tile.dart';
+import 'package:shop_pos/features/products/widgets/import/import_summary_chips.dart';
 
 class CsvImportDialog extends ConsumerStatefulWidget {
   const CsvImportDialog({super.key});
@@ -45,15 +45,11 @@ class _CsvImportDialogState extends ConsumerState<CsvImportDialog>
   late final TabController _tabController;
   final TextEditingController _textController = TextEditingController();
 
-  String? _pickedFileName;
-  int? _pickedFileSize;
-  CsvParseResult? _parseResult;
-  bool _isImporting = false;
-  bool _isParsing = false;
-  String? _fileError;
-
   bool get _isOwner =>
       ref.watch(currentUserProvider)?.role == AppConstants.roleOwner;
+
+  ImportProductsController get _controller =>
+      ref.read(importProductsProvider.notifier);
 
   @override
   void initState() {
@@ -68,826 +64,630 @@ class _CsvImportDialogState extends ConsumerState<CsvImportDialog>
     super.dispose();
   }
 
-  void _onTextChanged(String text) {
-    if (text.trim().isEmpty) {
-      setState(() => _parseResult = null);
-      return;
-    }
-    // Debounced so a large paste does not re-parse on every keystroke.
-    _debounceParse(text);
-  }
+  // ── Side effects driven by state changes ─────────
+  //
+  // The controller has no BuildContext, so dialogs and snackbars are
+  // triggered from here by watching the state.
 
-  Timer? _parseDebounce;
-
-  void _debounceParse(String text) {
-    _parseDebounce?.cancel();
-    _parseDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (!mounted) return;
-      final result = CsvImportService.parseCsv(text);
-      setState(() => _parseResult = result);
-    });
-  }
-
-  int? _getFileSize(PlatformFile file) {
-    if (file.path != null) {
-      try {
-        return File(file.path!).lengthSync();
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  Uint8List? _getFileBytes(PlatformFile file) {
-    if (file.path != null) {
-      try {
-        return File(file.path!).readAsBytesSync();
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  void _resetPickedFile() {
-    _parseDebounce?.cancel();
-    setState(() {
-      _pickedFileName = null;
-      _pickedFileSize = null;
-      _parseResult = null;
-      _fileError = null;
-      _textController.clear();
-    });
-  }
-
-  Future<void> _pickImportFile() async {
-    if (!_isOwner) {
-      context.showErrorSnackbar('Only the owner can import products.');
+  void _listen(ImportProductsState state) {
+    final notice = state.notice;
+    if (notice != null) {
+      switch (notice.kind) {
+        case ImportNoticeKind.success:
+          context.showSuccessSnackbar(notice.message);
+        case ImportNoticeKind.error:
+          context.showErrorSnackbar(notice.message);
+        case ImportNoticeKind.info:
+          context.showInfoSnackbar(notice.message);
+      }
+      _controller.clearNotice();
       return;
     }
 
-    try {
-      final files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ImportFileExtensions.pickerAllowed,
-      );
-
-      if (files.isEmpty) return;
-
-      final file = files.single;
-      final ext = (file.name.split('.').last).toLowerCase();
-
-      if (ImportFileExtensions.unsupported.contains(ext)) {
-        setState(() {
-          _fileError = kUnsupportedImportFormatMessage;
-          _pickedFileName = file.name;
-          _pickedFileSize = _getFileSize(file);
-          _parseResult = null;
-        });
-        if (mounted) {
-          context.showErrorSnackbar(kUnsupportedImportFormatMessage);
-        }
-        return;
-      }
-
-      if (!ImportFileExtensions.allProductImportable.contains(ext)) {
-        setState(() => _fileError =
-            '"${file.name}" is not a CSV or Excel file we can read.');
-        return;
-      }
-
-      final bytes = _getFileBytes(file);
-      if (bytes == null || bytes.isEmpty) {
-        setState(() => _fileError = 'The selected file is empty.');
-        return;
-      }
-
-      setState(() {
-        _isParsing = true;
-        _fileError = null;
-        _pickedFileName = file.name;
-        _pickedFileSize = _getFileSize(file);
+    final mapping = state.mappingRequest;
+    if (mapping != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await _runMappingDialog(mapping);
       });
-
-      // Runs on a background isolate, so a large workbook will not
-      // freeze the dialog. Handles Excel decode, the numFmtId repair
-      // fallback, and CSV text as needed.
-      final result = await CsvImportService.parseExcelBytesAsync(
-        bytes,
-        fileName: file.name,
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        _isParsing = false;
-        _parseResult = result;
-        if (result.generalError != null) _fileError = result.generalError;
-      });
-
-      if (result.hasValidRows && mounted) {
-        context.showSuccessSnackbar(
-          'Loaded "${file.name}" — ${result.validCount} product(s) ready to import',
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isParsing = false;
-        _fileError = 'We could not open that file. Please try another one.';
-      });
-      debugPrint('[CsvImportDialog] file pick failed: $e');
-    }
-  }
-
-  Future<void> _pasteFromClipboard() async {
-    try {
-      final data = await Clipboard.getData(Clipboard.kTextPlain);
-      final text = data?.text ?? '';
-      if (text.trim().isEmpty) {
-        if (mounted) context.showErrorSnackbar('Clipboard is empty.');
-        return;
-      }
-      _textController.text = text;
-      _debounceParse(text);
-      if (mounted) context.showSuccessSnackbar('Pasted from clipboard');
-    } catch (e) {
-      if (mounted) context.showErrorSnackbar('Could not read the clipboard.');
-      debugPrint('[CsvImportDialog] clipboard failed: $e');
-    }
-  }
-
-  void _loadSampleTemplate() {
-    const sample = '''name,price,quantity,category,sku,barcode
-"Apple iPhone 15 Pro",999.99,10,Electronics,APL-15PRO-001,1234567890123
-"Samsung Galaxy S24",849.99,15,Electronics,SAM-S24-002,1234567890124
-"MacBook Air M3",1299.00,5,Computers,MBP-AIR-M3-003,1234567890125
-"Sony WH-1000XM5",349.99,20,Audio,SNY-WH1000XM5-004,1234567890126
-"Nike Air Max 270",129.99,30,Footwear,NKE-AM270-005,1234567890127''';
-    _textController.text = sample;
-    _debounceParse(sample);
-  }
-
-  Future<void> _commitImport() async {
-    if (_parseResult == null || !_parseResult!.hasValidRows) {
-      context.showErrorSnackbar('Nothing to import yet.');
-      return;
-    }
-    if (!_isOwner) {
-      context.showErrorSnackbar('Only the owner can import products.');
       return;
     }
 
-    setState(() => _isImporting = true);
-
-    try {
-      final isar = ref.read(isarProvider);
-      final summary = await CsvImportService.importProductsWithSummary(
-        isar: isar,
-        rows: _parseResult!.rows,
-      );
-
-      if (!mounted) return;
-
-      // Make the Products screen reflect the new catalog immediately.
-      ref.invalidate(productServiceProvider);
-
-      if (summary.total == 0) {
-        context.showErrorSnackbar('Nothing was imported — all rows failed.');
-      } else {
-        context.showSuccessSnackbar(summary.headline);
-      }
-
-      await _showSummarySheet(summary);
-      _resetPickedFile();
-    } catch (e) {
-      if (mounted) {
-        context.showErrorSnackbar('The import could not be completed.');
-      }
-      debugPrint('[CsvImportDialog] import failed: $e');
-    } finally {
-      if (mounted) setState(() => _isImporting = false);
+    if (state.status == ImportStatus.success) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await _showSuccessDialog(state);
+      });
     }
   }
 
-  Future<void> _showSummarySheet(ImportSummary summary) async {
-    await showModalBottomSheet<void>(
+  Future<void> _runMappingDialog(ImportMappingRequest request) async {
+    final mapping = await ColumnMappingDialog.show(
+      context,
+      headerLabels: request.headerLabels,
+      sampleRows: request.sampleRows,
+    );
+    if (!mounted) return;
+
+    if (mapping == null) {
+      _controller.cancelMapping();
+      return;
+    }
+    await _controller.applyMapping(mapping);
+  }
+
+  Future<void> _showSuccessDialog(ImportProductsState state) async {
+    final summary = state.summary;
+    if (summary == null) return;
+
+    final saved = state.savedCount;
+    final skipped = state.skippedCount;
+    final total = state.totalCount;
+
+    await showDialog<void>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.check_circle_rounded,
+            color: AppColors.success, size: 48),
+        title: const Text('Import complete'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$saved imported (${summary.imported} new, ${summary.updated} '
+              'updated). $skipped skipped.',
+              style: Theme.of(ctx).textTheme.bodyLarge,
+            ),
+            if (summary.skipped > 0) ...[
+              const SizedBox(height: AppSpacing.xs),
               Text(
-                'Import complete',
-                style: Theme.of(ctx).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Row(
-                children: [
-                  _summaryTile('Imported', summary.imported, AppColors.success),
-                  const SizedBox(width: AppSpacing.sm),
-                  _summaryTile('Updated', summary.updated, AppColors.info),
-                  const SizedBox(width: AppSpacing.sm),
-                  _summaryTile('Skipped', summary.skipped, AppColors.warning),
-                ],
-              ),
-              if (summary.skipReasons.isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  'Skipped rows',
-                  style: Theme.of(ctx).textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                ...summary.skipReasons.take(10).map(
-                      (r) => Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(
-                          '• $r',
-                          style: Theme.of(ctx).textTheme.bodySmall,
-                        ),
-                      ),
+                'A few rows could not be saved. Open Import again to retry '
+                'them.',
+                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: AppColors.warningDarkText,
                     ),
-              ],
-              const SizedBox(height: AppSpacing.lg),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('Done'),
-                ),
               ),
             ],
+            if (skipped == 0 && total > 0) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Every row in the file was imported.',
+                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: AppColors.successDarkText,
+                    ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    _controller.finishSuccess();
+    // Refresh the Products list, then return to it.
+    ref.invalidate(productServiceProvider);
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _confirmAndAccept(ImportProductsState state) async {
+    final valid = state.validCount;
+    final issues = state.issueCount;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Import $valid valid item${valid == 1 ? '' : 's'}?'),
+        content: Text(
+          issues == 0
+              ? 'All $valid rows will be added to your catalog.'
+              : '$issues row${issues == 1 ? '' : 's'} with issues will be '
+                  'skipped.',
+          style: Theme.of(ctx).textTheme.bodyLarge,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+    await _controller.accept();
+  }
+
+  Future<void> _downloadIssues(ImportProductsState state) async {
+    final issues = state.issueRows;
+    if (issues.isEmpty) return;
+    try {
+      final path = await InvalidRowsExport.write(
+        issues,
+        sourceName: state.fileName ?? 'import',
+      );
+      if (!mounted) return;
+      if (path == null) {
+        context.showInfoSnackbar('There are no issues to download.');
+      } else {
+        context.showSuccessSnackbar('Saved skipped rows to $path');
+      }
+    } catch (e) {
+      debugPrint('[ImportProducts] export failed: $e');
+      if (mounted) context.showErrorSnackbar('We could not write that file.');
+    }
+  }
+
+  // ── Build ────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(importProductsProvider);
+    ref.listen<ImportProductsState>(
+      importProductsProvider,
+      (previous, next) {
+        if (previous?.status != next.status ||
+            previous?.notice != next.notice ||
+            previous?.mappingRequest != next.mappingRequest) {
+          _listen(next);
+        }
+      },
+    );
+
+    return Dialog.fullscreen(
+      child: PopScope(
+        // Block back navigation mid-write so the owner cannot leave a
+        // transaction half-applied.
+        canPop: state.status != ImportStatus.importing,
+        child: Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              tooltip: 'Close',
+              onPressed: state.status == ImportStatus.importing
+                  ? null
+                  : () => Navigator.of(context).pop(),
+            ),
+            // The Accept action lives at the bottom, so the AppBar has no
+            // actions at all. The title must never share a row with a
+            // button, which is what previously pushed it off-screen.
+            title: const Text(
+              'Import Products',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          body: SafeArea(
+            top: false,
+            child: !_isOwner
+                ? _buildOwnerGate(context)
+                : Column(
+                    children: [
+                      Expanded(child: _buildStatusBody(context, state)),
+                      if (state.status == ImportStatus.preview ||
+                          state.status == ImportStatus.importing)
+                        ImportActionBar(
+                          validCount: state.validCount,
+                          issueCount: state.issueCount,
+                          enabled: state.status != ImportStatus.importing,
+                          onAccept: state.canAccept
+                              ? () => _confirmAndAccept(state)
+                              : null,
+                          onCancel: () => Navigator.of(context).pop(),
+                          onDownloadIssues: () => _downloadIssues(state),
+                        ),
+                    ],
+                  ),
           ),
         ),
       ),
     );
   }
 
-  Widget _summaryTile(String label, int value, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-        ),
-        child: Column(
-          children: [
-            Text(
-              '$value',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: color, fontWeight: FontWeight.bold),
-            ),
-            Text(label, style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
-    );
+  /// The screen body, chosen purely by status.
+  Widget _buildStatusBody(BuildContext context, ImportProductsState state) {
+    switch (state.status) {
+      case ImportStatus.empty:
+      case ImportStatus.loading:
+      case ImportStatus.error:
+        return _buildInputState(context, state);
+
+      case ImportStatus.preview:
+      case ImportStatus.importing:
+        return _buildPreview(context, state);
+
+      case ImportStatus.success:
+        // The success dialog is modal over the preview, which is still the
+        // correct thing to show behind it.
+        return _buildPreview(context, state);
+    }
   }
 
-  // ── File tab ────────────────────────────────────
+  // ── Input states: empty, loading, error ───────────
 
-  Widget _buildFileTab() {
-    return ListView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
+  Widget _buildInputState(BuildContext context, ImportProductsState state) {
+    final showTabs = state.status != ImportStatus.loading;
+
+    return Column(
       children: [
-        _buildDropZone(),
-        if (_fileError != null) ...[
-          const SizedBox(height: AppSpacing.lg),
-          _buildErrorBanner(),
-        ],
-        const SizedBox(height: AppSpacing.lg),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _isParsing ? null : _pickImportFile,
-                icon: const Icon(Icons.folder_open),
-                label: const Text('Browse Files'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                ),
-              ),
-            ),
-            if (_pickedFileName != null) ...[
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _resetPickedFile,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Clear'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                  ),
-                ),
-              ),
+        if (showTabs)
+          TabBar(
+            controller: _tabController,
+            labelStyle: const TextStyle(fontWeight: FontWeight.w700),
+            tabs: const [
+              Tab(text: 'Pick CSV / Excel File'),
+              Tab(text: 'Paste CSV Data'),
             ],
-          ],
+          ),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildFileTab(context, state),
+              _buildPasteTab(context, state),
+            ],
+          ),
         ),
-        // Preview lives inside the tab, not as a sibling Expanded.
-        ..._buildPreviewSection(),
       ],
     );
   }
 
-  Widget _buildDropZone() {
-    final cs = context.colorScheme;
-    final hasFile = _pickedFileName != null;
+  Widget _buildFileTab(BuildContext context, ImportProductsState state) {
+    final isLoading = state.status == ImportStatus.loading;
+    final hasText = state.pastedText != null;
 
-    return GestureDetector(
-      onTap: _isParsing ? null : _pickImportFile,
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-          border: Border.all(
-            color: _fileError != null
-                ? cs.error
-                : hasFile
-                    ? cs.primary
-                    : cs.outline,
-            width: 2,
-          ),
+    return ListView(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      children: [
+        ImportFileCard(
+          fileName: hasText ? null : state.fileName,
+          fileSizeBytes: hasText ? null : state.fileSizeBytes,
+          isLoading: isLoading,
+          isCompact: false,
+          isError: state.status == ImportStatus.error,
+          // Disabled while loading, per the loading spec.
+          onBrowse: isLoading ? null : _controller.browseForFile,
         ),
-        child: Column(
-          children: [
-            if (_isParsing)
-              const Padding(
-                padding: EdgeInsets.all(AppSpacing.sm),
-                child: SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: CircularProgressIndicator(strokeWidth: 3),
-                ),
-              )
-            else
-              Icon(
-                hasFile ? Icons.check_circle_outline : Icons.cloud_upload_outlined,
-                size: 48,
-                color: _fileError != null
-                    ? cs.error
-                    : hasFile
-                        ? cs.primary
-                        : cs.onSurfaceVariant,
-              ),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              _isParsing
-                  ? 'Reading file…'
-                  : _pickedFileName ?? 'Select a CSV or Excel file',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: _fileError != null
-                        ? cs.error
-                        : hasFile
-                            ? cs.primary
-                            : cs.onSurface,
-                    fontWeight: FontWeight.w600,
-                  ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              'Supports .csv, .xlsx and .xls',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
-              textAlign: TextAlign.center,
-            ),
-            if (_pickedFileSize != null) ...[
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Size: ${_formatFileSize(_pickedFileSize!)}',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: cs.onSurfaceVariant),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorBanner() {
-    final cs = context.colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: cs.errorContainer,
-        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.error_outline, color: cs.error, size: 20),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _fileError!,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(color: cs.onErrorContainer),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                // Always offer a route forward instead of a dead end.
-                OutlinedButton.icon(
-                  onPressed: () {
-                    _tabController.animateTo(1);
-                    context.showInfoSnackbar(
-                      'Open the "Paste CSV Data" tab and paste your rows.',
-                    );
-                  },
-                  icon: const Icon(Icons.content_paste, size: 18),
-                  label: const Text('Paste CSV instead'),
-                  style: OutlinedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-              ],
-            ),
-          ),
+        if (state.status == ImportStatus.error) ...[
+          const SizedBox(height: AppSpacing.lg),
+          _buildErrorCard(context, state),
         ],
-      ),
+      ],
     );
   }
 
-  // ── Paste tab ───────────────────────────────────
-
-  Widget _buildPasteTab() {
-    final cs = context.colorScheme;
+  Widget _buildPasteTab(BuildContext context, ImportProductsState state) {
+    final isLoading = state.status == ImportStatus.loading;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
 
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         Text(
           'Paste CSV Data',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
-              ?.copyWith(fontWeight: FontWeight.w600),
+          style: theme.textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: AppSpacing.xs),
         Text(
-          'Paste rows straight from a spreadsheet. The first row should '
-          'contain headers such as name, price, stock, category.',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
+          'Paste rows straight from a spreadsheet. The first line must be the '
+          'header row.',
+          style: theme.textTheme.bodyMedium
               ?.copyWith(color: cs.onSurfaceVariant),
         ),
         const SizedBox(height: AppSpacing.md),
-        TextField(
-          controller: _textController,
-          maxLines: 10,
-          minLines: 6,
-          decoration: InputDecoration(
-            hintText: 'name,price,stock,category\n'
-                '"Milo 400g",GH₵ 32.00,45,Beverages',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+        Semantics(
+          textField: true,
+          label: 'Paste CSV data. Expected header: '
+              'name, category, price, cost, stock, barcode',
+          child: TextField(
+            controller: _textController,
+            enabled: !isLoading,
+            // 8 lines is the floor the spec asks for, so the expected
+            // header plus a few rows are visible without scrolling.
+            minLines: 8,
+            maxLines: 12,
+            keyboardType: TextInputType.multiline,
+            textCapitalization: TextCapitalization.none,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(fontFamily: 'monospace'),
+            decoration: InputDecoration(
+              hintText: 'name, category, price, cost, stock, barcode\n'
+                  'Milo 400g, Beverages, 32.00, 28.00, 45, 5012345678900',
+              hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+                fontFamily: 'monospace',
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(kImportCardRadius),
+              ),
+              filled: true,
+              fillColor: cs.surface,
             ),
-            filled: true,
-            fillColor: cs.surfaceContainerHighest,
           ),
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(fontFamily: 'monospace'),
-          onChanged: _onTextChanged,
         ),
         const SizedBox(height: AppSpacing.md),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _pasteFromClipboard,
-                icon: const Icon(Icons.paste),
-                label: const Text('Clipboard'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+        Semantics(
+          button: true,
+          label: 'Parse pasted CSV data',
+          child: SizedBox(
+            height: AppTouch.buttonHeight,
+            child: FilledButton.icon(
+              onPressed: isLoading
+                  ? null
+                  : () => _controller.parsePastedText(_textController.text),
+              icon: const Icon(Icons.play_arrow_rounded, size: 20),
+              label: const Text('Parse'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: AppColors.textOnPrimary,
+                textStyle: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _loadSampleTemplate,
-                icon: const Icon(Icons.description_outlined),
-                label: const Text('Sample'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
-        ..._buildPreviewSection(),
+        if (state.status == ImportStatus.error) ...[
+          const SizedBox(height: AppSpacing.lg),
+          _buildErrorCard(context, state),
+        ],
       ],
     );
   }
 
-  // ── Preview + validation ────────────────────────
-
-  List<Widget> _buildPreviewSection() {
-    final result = _parseResult;
-    if (result == null) return const [];
-
-    return [
-      const SizedBox(height: AppSpacing.lg),
-      _buildValidationStrip(),
-      const SizedBox(height: AppSpacing.md),
-      _buildPreviewTable(),
-    ];
-  }
-
-  Widget _buildValidationStrip() {
-    final result = _parseResult!;
-    final hasErrors = result.invalidCount > 0 || result.generalError != null;
-    final cs = context.colorScheme;
+  /// Friendly failure with a Retry and a pointer at the other input.
+  Widget _buildErrorCard(BuildContext context, ImportProductsState state) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: hasErrors
-            ? cs.errorContainer
-            : AppColors.success.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+      width: double.infinity,
+      padding: const EdgeInsets.all(kImportCardPadding),
+      decoration: importCardDecoration(
+        border: cs.error,
+        fill: cs.error.withValues(alpha: 0.06),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                hasErrors ? Icons.warning_amber_rounded : Icons.check_circle_outline,
-                color: hasErrors ? cs.error : AppColors.success,
-                size: 20,
-              ),
+              Icon(Icons.error_outline_rounded, color: cs.error, size: 22),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Text(
-                  hasErrors ? 'Some rows need attention' : 'All rows look good',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: hasErrors ? cs.onErrorContainer : AppColors.success,
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Row(
-            children: [
-              _buildStatChip('Ready', result.validCount.toString(), AppColors.success),
-              const SizedBox(width: AppSpacing.sm),
-              _buildStatChip('Skipped', result.invalidCount.toString(), cs.error),
-            ],
-          ),
-          // Surface the specific reasons, with row numbers, rather than
-          // just a count.
-          if (result.invalidCount > 0) ...[
-            const SizedBox(height: AppSpacing.sm),
-            ...result.rows
-                .where((r) => !r.isValid)
-                .take(6)
-                .map(
-                  (r) => Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Text(
-                      '• Row ${r.rowNumber}: ${r.errorMessage}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: cs.onErrorContainer,
-                          ),
+                // errorMessage is always text written in this feature; the
+                // raw exception never reaches it.
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    state.errorMessage ?? 'Something went wrong.',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: AppColors.dangerDarkText,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-            if (result.invalidCount > 6)
-              Text(
-                '…and ${result.invalidCount - 6} more',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: cs.onErrorContainer),
               ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatChip(String label, String value, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          vertical: AppSpacing.sm,
-          horizontal: AppSpacing.md,
-        ),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-        ),
-        child: Column(
-          children: [
-            Text(
-              value,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.bold,
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xs,
+            children: [
+              Semantics(
+                button: true,
+                label: 'Retry',
+                child: OutlinedButton.icon(
+                  onPressed: _controller.retry,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Retry'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(color: AppColors.primary),
+                    minimumSize: const Size(0, AppTouch.minTargetSize),
                   ),
-            ),
-            Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color)),
-          ],
-        ),
+                ),
+              ),
+              Semantics(
+                button: true,
+                label: 'Switch to the Paste CSV Data tab',
+                child: OutlinedButton.icon(
+                  onPressed: () => _tabController.animateTo(1),
+                  icon: const Icon(Icons.content_paste_rounded, size: 18),
+                  label: const Text('Paste CSV instead'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: cs.onSurface,
+                    side: BorderSide(color: cs.outline),
+                    minimumSize: const Size(0, AppTouch.minTargetSize),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildPreviewTable() {
-    final result = _parseResult!;
-    if (!result.hasValidRows) {
-      return Text(
-        'No importable rows yet.',
-        style: Theme.of(context)
-            .textTheme
-            .bodySmall
-            ?.copyWith(color: context.colorScheme.onSurfaceVariant),
-      );
-    }
+  // ── Preview ──────────────────────────────────────
 
-    final validRows = result.rows.where((r) => r.isValid).toList();
-    // First 5 rows only, per spec — enough to confirm the mapping is
-    // right without flooding a phone screen.
-    final preview = validRows.take(5).toList();
+  Widget _buildPreview(BuildContext context, ImportProductsState state) {
+    final rows = state.visibleRows;
+    final isImporting = state.status == ImportStatus.importing;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Stack(
+      // expand gives the Column a tight, bounded height so its Expanded
+      // list can lay out. With the default loose fit the Column is
+      // unbounded and the list throws.
+      fit: StackFit.expand,
       children: [
-        Text(
-          'Preview — ${validRows.length} product(s) ready',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
-              ?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Card(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              headingRowColor:
-                  WidgetStateProperty.all(context.colorScheme.surfaceContainerHighest),
-              columns: const [
-                DataColumn(label: Text('Name')),
-                DataColumn(label: Text('Price')),
-                DataColumn(label: Text('Qty')),
-                DataColumn(label: Text('Category')),
-              ],
-              rows: preview
-                  .map(
-                    (r) => DataRow(cells: [
-                      DataCell(
-                        Text(r.name, overflow: TextOverflow.ellipsis, maxLines: 1),
-                      ),
-                      DataCell(Text(CurrencyHelpers.format(r.price))),
-                      DataCell(Text(r.quantity.toString())),
-                      DataCell(
-                        Text(
-                          r.category.isEmpty ? '—' : r.category,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      ),
-                    ]),
-                  )
-                  .toList(),
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.md,
+                AppSpacing.lg,
+                AppSpacing.sm,
+              ),
+              child: Column(
+                children: [
+                  ImportFileCard(
+                    fileName: state.fileName,
+                    fileSizeBytes: state.fileSizeBytes,
+                    isLoading: false,
+                    isCompact: true,
+                    isError: false,
+                    onChooseAnother: isImporting
+                        ? null
+                        : _controller.chooseAnotherFile,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  ImportSummaryChips(
+                    total: state.totalCount,
+                    valid: state.validCount,
+                    issues: state.issueCount,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  ImportFilterBar(
+                    selected: state.filter,
+                    totalCount: state.totalCount,
+                    validCount: state.validCount,
+                    issueCount: state.issueCount,
+                    enabled: !isImporting,
+                    onChanged: _controller.setFilter,
+                  ),
+                ],
+              ),
             ),
-          ),
+            Expanded(
+              child: rows.isEmpty
+                  ? _buildEmptyFilter(context, state)
+                  : ListView.separated(
+                      // Room for the sticky bar, so the last row is never
+                      // trapped underneath it.
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.lg,
+                        AppSpacing.xs,
+                        AppSpacing.lg,
+                        AppSpacing.xxl,
+                      ),
+                      itemCount: rows.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1),
+                      itemBuilder: (_, index) => ImportRowTile(row: rows[index]),
+                    ),
+            ),
+          ],
         ),
-        if (validRows.length > 5) ...[
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            'Showing the first ${preview.length} of ${validRows.length} products.',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: context.colorScheme.onSurfaceVariant),
-          ),
-        ],
+        if (isImporting) _buildImportingOverlay(context, state),
       ],
     );
   }
 
-  String _formatFileSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  Widget _buildEmptyFilter(BuildContext context, ImportProductsState state) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Text(
+          'No rows in this filter',
+          style: theme.textTheme.bodyLarge
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+      ),
+    );
   }
 
-  // ── Non-owner view ──────────────────────────────
+  /// Full-screen modal progress. Sits above everything, including the
+  /// action bar, so nothing can be tapped mid-write.
+  Widget _buildImportingOverlay(
+      BuildContext context, ImportProductsState state) {
+    final theme = Theme.of(context);
+    return Positioned.fill(
+      child: AbsorbPointer(
+        // Swallows every tap so nothing underneath can be pressed while the
+        // transaction runs.
+        child: ColoredBox(
+          color: Colors.black54,
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.all(AppSpacing.xl),
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              decoration: importCardDecoration(
+                border: Colors.transparent,
+                fill: theme.colorScheme.surface,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: AppSpacing.lg),
+                  Semantics(
+                    liveRegion: true,
+                    label: 'Importing ${state.validCount} items, please wait',
+                    child: Text(
+                      'Importing ${state.validCount} item'
+                      '${state.validCount == 1 ? '' : 's'}...',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-  Widget _buildRestrictedView() {
-    final cs = context.colorScheme;
+  // ── Owner gate ───────────────────────────────────
+
+  Widget _buildOwnerGate(BuildContext context) {
+    final theme = Theme.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline, size: 48, color: cs.onSurfaceVariant),
+            Icon(Icons.lock_outline,
+                size: 44, color: theme.colorScheme.onSurfaceVariant),
             const SizedBox(height: AppSpacing.md),
             Text(
               'Owner access required',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Only the shop owner can import products. Ask the owner to '
-              'sign in and do it from Settings.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              'Only the shop owner can import products. Ask the owner to sign '
+              'in and do it from Settings.',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // SafeArea keeps the tabs and the preview clear of the system status
-    // bar and any gesture inset on notched devices.
-    return Dialog.fullscreen(
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Import Products'),
-          leading: IconButton(
-            icon: const Icon(Icons.close),
-            tooltip: 'Close',
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          actions: [
-            if (_isOwner)
-              Padding(
-                padding: const EdgeInsets.only(right: AppSpacing.sm),
-                child: TextButton.icon(
-                  onPressed: (_isImporting || _isParsing) ? null : _commitImport,
-                  icon: _isImporting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.check),
-                  label: Text(_isImporting ? 'Importing…' : 'Import'),
-                ),
-              ),
-          ],
-        ),
-        body: !_isOwner
-            ? _buildRestrictedView()
-            : SafeArea(
-                top: false,
-                child: Column(
-                  children: [
-                    const TabBar(
-                      tabs: [
-                        Tab(text: 'Pick File'),
-                        Tab(text: 'Paste CSV'),
-                      ],
-                      labelStyle: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    // Single Expanded only — the preview is rendered
-                    // inside each tab's own scroll view.
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildFileTab(),
-                          _buildPasteTab(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
       ),
     );
   }

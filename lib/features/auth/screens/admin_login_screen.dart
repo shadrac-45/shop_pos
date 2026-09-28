@@ -92,11 +92,12 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         );
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _errorMsg = 'An error occurred. Please try again.';
           _loading = false;
         });
+      }
     }
   }
 

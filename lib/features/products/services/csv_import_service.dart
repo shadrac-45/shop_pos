@@ -53,6 +53,12 @@ class CsvProductRow {
   final String? errorMessage;
   final int rowNumber;
 
+  /// Original cell text, kept so the "download invalid rows" export can
+  /// show what the file actually contained rather than the parsed value.
+  final String rawName;
+  final String rawPrice;
+  final String rawStock;
+
   const CsvProductRow({
     required this.name,
     required this.price,
@@ -65,21 +71,43 @@ class CsvProductRow {
     required this.isValid,
     this.errorMessage,
     this.rowNumber = 0,
+    this.rawName = '',
+    this.rawPrice = '',
+    this.rawStock = '',
   });
+
+  /// Falls back to the parsed value when the original text was not kept.
+  String get rawPriceForExport =>
+      rawPrice.isNotEmpty ? rawPrice : price.toStringAsFixed(2);
+
+  String get rawStockForExport =>
+      rawStock.isNotEmpty ? rawStock : quantity.toString();
 }
 
 class CsvParseResult {
   final List<CsvProductRow> rows;
   final String? generalError;
 
+  /// True when the column mapping must be confirmed by the owner before
+  /// anything can be imported.
+  final bool needsMapping;
+  final List<String> headerLabels;
+  final List<List<String>> sampleRows;
+
   const CsvParseResult({
     required this.rows,
     this.generalError,
+    this.needsMapping = false,
+    this.headerLabels = const [],
+    this.sampleRows = const [],
   });
 
   int get validCount => rows.where((r) => r.isValid).length;
   int get invalidCount => rows.where((r) => !r.isValid).length;
   bool get hasValidRows => validCount > 0;
+
+  List<CsvProductRow> get validRows => rows.where((r) => r.isValid).toList();
+  List<CsvProductRow> get invalidRows => rows.where((r) => !r.isValid).toList();
 }
 
 /// Outcome of committing rows to Isar, so the UI can report
@@ -122,39 +150,7 @@ This Way Chocolate Drink,2.50,150,Beverages''';
   /// Parses raw CSV text. Delegates to [ProductImportParser] and adapts
   /// the result to the legacy [CsvParseResult] shape.
   static CsvParseResult parseCsv(String rawCsv) {
-    final parsed = ProductImportParser.parseCsvText(rawCsv);
-
-    final rows = <CsvProductRow>[
-      for (final row in parsed.rows)
-        CsvProductRow(
-          name: row.name,
-          price: row.price,
-          quantity: row.quantity,
-          category: row.category,
-          barcode: row.barcode,
-          sku: row.sku,
-          costPrice: row.costPrice,
-          isValid: true,
-          rowNumber: row.rowNumber,
-        ),
-    ];
-
-    for (final issue in parsed.issues) {
-      rows.add(CsvProductRow(
-        name: '[Row ${issue.rowNumber}]',
-        price: 0.0,
-        quantity: 0,
-        category: 'General',
-        isValid: false,
-        errorMessage: issue.reason,
-        rowNumber: issue.rowNumber,
-      ));
-    }
-
-    return CsvParseResult(
-      rows: rows,
-      generalError: parsed.userMessage,
-    );
+    return _toServiceResult(ProductImportParser.parseCsvText(rawCsv));
   }
 
   /// Parses spreadsheet bytes via the resilient pipeline (direct Excel
@@ -164,45 +160,47 @@ This Way Chocolate Drink,2.50,150,Beverages''';
     Uint8List bytes, {
     String fileName = '',
   }) async {
-    final parsed = await ProductImportParser.parseFile(bytes, fileName: fileName);
-
-    final rows = <CsvProductRow>[
-      for (final row in parsed.rows)
-        CsvProductRow(
-          name: row.name,
-          price: row.price,
-          quantity: row.quantity,
-          category: row.category,
-          barcode: row.barcode,
-          sku: row.sku,
-          costPrice: row.costPrice,
-          isValid: true,
-          rowNumber: row.rowNumber,
-        ),
-    ];
-
-    for (final issue in parsed.issues) {
-      rows.add(CsvProductRow(
-        name: '[Row ${issue.rowNumber}]',
-        price: 0.0,
-        quantity: 0,
-        category: 'General',
-        isValid: false,
-        errorMessage: issue.reason,
-        rowNumber: issue.rowNumber,
-      ));
-    }
-
-    return CsvParseResult(
-      rows: rows,
-      generalError: parsed.userMessage,
-    );
+    final parsed =
+        await ProductImportParser.parseFile(bytes, fileName: fileName);
+    return _toServiceResult(parsed);
   }
 
   /// Synchronous spreadsheet parse, retained for tests and the sample
   /// seeder. Prefer [parseExcelBytesAsync] from the UI.
   static CsvParseResult parseExcelBytes(List<int> bytes) {
-    final parsed = ProductImportParser.parseBytesSync(Uint8List.fromList(bytes));
+    return _toServiceResult(
+      ProductImportParser.parseBytesSync(Uint8List.fromList(bytes)),
+    );
+  }
+
+  /// Re-parses a file with a mapping the owner confirmed in the mapping
+  /// dialog. Returns rows flagged valid/invalid, no longer a mapping prompt.
+  static Future<CsvParseResult> parseBytesWithMappingAsync(
+    Uint8List bytes,
+    ColumnMapping mapping, {
+    String fileName = '',
+  }) async {
+    final parsed = await ProductImportParser.parseFileWithMapping(
+      bytes,
+      mapping,
+      fileName: fileName,
+    );
+    return _toServiceResult(parsed);
+  }
+
+  /// Synchronous counterpart of [parseBytesWithMappingAsync], for tests.
+  static CsvParseResult parseCsvWithMapping(
+    String rawCsv,
+    ColumnMapping mapping,
+  ) {
+    return _toServiceResult(
+      ProductImportParser.parseCsvTextWithMapping(rawCsv, mapping),
+    );
+  }
+
+  /// Adapts a parser result into the service's own row type, preserving
+  /// every row — valid and invalid — plus the mapping prompt fields.
+  static CsvParseResult _toServiceResult(ProductImportParseResult parsed) {
     final rows = <CsvProductRow>[
       for (final row in parsed.rows)
         CsvProductRow(
@@ -211,24 +209,24 @@ This Way Chocolate Drink,2.50,150,Beverages''';
           quantity: row.quantity,
           category: row.category,
           barcode: row.barcode,
-          sku: row.sku,
+          sku: null,
           costPrice: row.costPrice,
-          isValid: true,
+          isValid: row.isValid,
+          errorMessage: row.isValid ? null : row.errorSummary,
           rowNumber: row.rowNumber,
+          rawName: row.rawName,
+          rawPrice: row.rawPrice,
+          rawStock: row.rawStock,
         ),
     ];
-    for (final issue in parsed.issues) {
-      rows.add(CsvProductRow(
-        name: '[Row ${issue.rowNumber}]',
-        price: 0.0,
-        quantity: 0,
-        category: 'General',
-        isValid: false,
-        errorMessage: issue.reason,
-        rowNumber: issue.rowNumber,
-      ));
-    }
-    return CsvParseResult(rows: rows, generalError: parsed.userMessage);
+
+    return CsvParseResult(
+      rows: rows,
+      generalError: parsed.userMessage,
+      needsMapping: parsed.needsMapping,
+      headerLabels: parsed.headerLabels,
+      sampleRows: parsed.sampleRows,
+    );
   }
 
   /// Convenience wrapper that reads a file from disk and delegates to
@@ -322,7 +320,8 @@ This Way Chocolate Drink,2.50,150,Beverages''';
             productId = await isar.products.put(existing);
             productToUse = existing;
             updated++;
-            debugPrint('[CsvImportService] Updated "$row.name" matched on $matchedOn');
+            debugPrint(
+                '[CsvImportService] Updated "$row.name" matched on $matchedOn');
           } else {
             final product = Product()
               ..name = row.name
@@ -355,7 +354,8 @@ This Way Chocolate Drink,2.50,150,Beverages''';
         } catch (e) {
           skipped++;
           skipReasons.add('${row.name}: $e');
-          debugPrint('[CsvImportService] Error importing row "${row.name}": $e');
+          debugPrint(
+              '[CsvImportService] Error importing row "${row.name}": $e');
         }
       }
     });
@@ -385,4 +385,3 @@ This Way Chocolate Drink,2.50,150,Beverages''';
     return importProductsToIsar(isar: isar, rows: result.rows);
   }
 }
-

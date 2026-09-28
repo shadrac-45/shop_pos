@@ -140,8 +140,7 @@ void main() {
     });
 
     test('stripReservedNumFmts removes only ids below 164', () {
-      const xml =
-          '<styleSheet>'
+      const xml = '<styleSheet>'
           '<numFmts>'
           '<numFmt numFmtId="42" formatCode="accounting"/>'
           '<numFmt numFmtId="163" formatCode="reserved"/>'
@@ -161,13 +160,15 @@ void main() {
       expect(stripped, contains('</numFmts>'));
     });
 
-    test('async parseFile resolves the same result off the UI isolate', () async {
+    test('async parseFile resolves the same result off the UI isolate',
+        () async {
       final bytes = buildNumFmt42Workbook(rows: [
         ['name', 'price', 'quantity', 'category'],
         ['Ideal Milk', 11.0, 80, 'Dairy'],
       ]);
 
-      final result = await ProductImportParser.parseFile(bytes, fileName: 'list.xlsx');
+      final result =
+          await ProductImportParser.parseFile(bytes, fileName: 'list.xlsx');
 
       expect(result.isSuccess, isTrue);
       expect(result.strategy, ImportDecodeStrategy.excelAfterStyleRepair);
@@ -178,8 +179,8 @@ void main() {
   group('header alias mapping', () {
     test('accepts the documented aliases, case- and space-insensitively', () {
       final result = ProductImportParser.parseCsvText(
-        'Item,Selling Price,Stock,Dept,Barcode,SKU\n'
-        'Tomato Paste,5.00,100,Canned Goods,111222333,TP-001',
+        'Item,Selling Price,Stock,Dept,Barcode\n'
+        'Tomato Paste,5.00,100,Canned Goods,111222333',
       );
 
       expect(result.isSuccess, isTrue);
@@ -189,7 +190,28 @@ void main() {
       expect(row.quantity, 100);
       expect(row.category, 'Canned Goods');
       expect(row.barcode, '111222333');
-      expect(row.sku, 'TP-001');
+    });
+
+    test('an sku header is a barcode alias, and only one wins', () {
+      // "sku" is in the barcode alias list. A column is claimed once, so
+      // when both barcode and sku headers are present, barcode takes it
+      // and the sku column is left unmapped rather than double-feeding.
+      final result = ProductImportParser.parseCsvText(
+        'name,price,barcode,sku\n'
+        'Tomato Paste,5.00,111222333,TP-001',
+      );
+
+      final row = result.rows.single;
+      expect(row.barcode, '111222333');
+    });
+
+    test('a sku-only header still populates the barcode field', () {
+      final result = ProductImportParser.parseCsvText(
+        'name,price,sku\n'
+        'Tomato Paste,5.00,TP-001',
+      );
+
+      expect(result.rows.single.barcode, 'TP-001');
     });
 
     test('maps cost and price to separate columns', () {
@@ -272,8 +294,8 @@ void main() {
       );
 
       expect(result.isSuccess, isTrue);
-      expect(result.rows, hasLength(2));
-      expect(result.issues, isEmpty);
+      expect(result.validRows, hasLength(2));
+      expect(result.invalidRows, isEmpty);
     });
 
     test('reports skipped rows with their true line numbers', () {
@@ -285,14 +307,14 @@ void main() {
         'Also Good,20.00,2',
       );
 
-      expect(result.rows, hasLength(2));
-      expect(result.issues, hasLength(2));
+      expect(result.validRows, hasLength(2));
+      expect(result.invalidRows, hasLength(2));
 
-      expect(result.issues[0].rowNumber, 3, reason: 'the blank-name line');
-      expect(result.issues[0].reason, contains('Missing a product name'));
+      expect(result.invalidRows[0].rowNumber, 3, reason: 'the blank-name line');
+      expect(result.invalidRows[0].errors, contains('Missing name'));
 
-      expect(result.issues[1].rowNumber, 4, reason: 'the unparseable price line');
-      expect(result.issues[1].reason, contains('not-a-number'));
+      expect(result.invalidRows[1].rowNumber, 4, reason: 'the bad price line');
+      expect(result.invalidRows[1].errorSummary, contains('not-a-number'));
     });
 
     test('line numbers survive a blank line being skipped', () {
@@ -304,10 +326,10 @@ void main() {
         'Bad Price,not-a-number,5',
       );
 
-      expect(result.rows, hasLength(1));
-      expect(result.issues, hasLength(1));
+      expect(result.validRows, hasLength(1));
+      expect(result.invalidRows, hasLength(1));
       // The bad row is physically the 5th line of the file.
-      expect(result.issues.single.rowNumber, 5);
+      expect(result.invalidRows.single.rowNumber, 5);
     });
 
     test('never leaks a raw exception string to the user', () {

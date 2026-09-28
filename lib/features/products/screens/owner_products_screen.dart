@@ -156,56 +156,73 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
         color: AppColors.cardBg,
         border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.15),
-              borderRadius: AppSpacing.borderMd,
-            ),
-            child: const Icon(Icons.inventory_2_rounded, color: AppColors.primary, size: 24),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  ownerName,
-                  style: Theme.of(context).textTheme.titleLarge,
+      // The header adapts to the width it is actually given rather than
+      // assuming a tablet. On a 360dp phone the avatar, the title and
+      // two full-width buttons do not fit, so the action collapses to an
+      // icon that still meets the 48dp touch minimum.
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 400;
+
+          return Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: AppSpacing.borderMd,
                 ),
-                const Text(
-                  'Inventory & Stock Management',
-                  style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                child: const Icon(Icons.inventory_2_rounded, color: AppColors.primary, size: 24),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      ownerName,
+                      style: Theme.of(context).textTheme.titleLarge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const Text(
+                      'Inventory & Stock Management',
+                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-          OutlinedButton.icon(
-            onPressed: _showImportCsvDialog,
-            icon: const Icon(Icons.file_upload_outlined, size: 18),
-            label: const Text('Import CSV / Excel'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.primary,
-              side: const BorderSide(color: AppColors.primary),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          ElevatedButton.icon(
-            onPressed: _showAddProduct,
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Add Product'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              elevation: 0,
-            ),
-          ),
-        ],
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              if (compact)
+                IconButton(
+                  onPressed: _showImportCsvDialog,
+                  tooltip: 'Import CSV / Excel',
+                  icon: const Icon(Icons.file_upload_outlined, size: 20),
+                  color: AppColors.primary,
+                  style: IconButton.styleFrom(
+                    side: const BorderSide(color: AppColors.primary),
+                    minimumSize: const Size(AppTouch.minTargetSize, AppTouch.minTargetSize),
+                  ),
+                )
+              else
+                OutlinedButton.icon(
+                  onPressed: _showImportCsvDialog,
+                  icon: const Icon(Icons.file_upload_outlined, size: 18),
+                  label: const Text('Import CSV / Excel'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(color: AppColors.primary),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    minimumSize: const Size(0, AppTouch.minTargetSize),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -359,6 +376,16 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
     );
   }
 
+  /// First character shown in the tile avatar. Guards against an empty
+  /// or whitespace-only name, which would throw on a bare substring, and
+  /// reads runes rather than code units so an emoji or accented leading
+  /// character renders as one whole glyph instead of half a surrogate.
+  static String _avatarInitial(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '?';
+    return String.fromCharCodes(trimmed.runes.take(1)).toUpperCase();
+  }
+
   Widget _buildProductTile(Product product) {
     final isExpanded = _expandedProductId == product.id;
     final expiryColor = ExpiryHelpers.getColor(product.daysUntilExpiry);
@@ -392,7 +419,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                   ),
                   child: Center(
                     child: Text(
-                      product.name.substring(0, 1).toUpperCase(),
+                      _avatarInitial(product.name),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 18,

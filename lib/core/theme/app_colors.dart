@@ -36,6 +36,16 @@ class AppColors {
   static const Color danger = Color(0xFFDC2626);        // Rose 600 danger (> 5:1 ratio on light bg)
   static const Color info = Color(0xFF2563EB);          // Royal Blue 600 info (> 4.5:1 ratio on light bg)
 
+  // ── Status Text Colours ─────────────────────────────
+  /// Status text drawn on a PALE TINT of the matching status colour.
+  /// The tints are light, so the mid-tone status colours are not dark
+  /// enough on their own; these 800-level shades are. Amber 600 on a 12%
+  /// amber tint is only ~2.6:1, while Amber 800 clears 7:1.
+  static const Color successDarkText = Color(0xFF065F46); // Emerald 800
+  static const Color warningDarkText = Color(0xFF92400E); // Amber 800
+  static const Color dangerDarkText = Color(0xFF991B1B);  // Rose 800
+  static const Color infoDarkText = Color(0xFF1E40AF);    // Blue 800
+
   // ── Expiry Status Colors ────────────────────────────
   static const Color expiryGood = Color(0xFF059669);    // > 30 days
   static const Color expirySoon = Color(0xFFD97706);    // 7-30 days

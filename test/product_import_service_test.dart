@@ -68,7 +68,8 @@ void main() {
 
       expect(summary.imported, 2);
       expect(summary.updated, 0);
-      expect(summary.skipped, 0, reason: 'unparseable rows never reach the writer');
+      expect(summary.skipped, 0,
+          reason: 'unparseable rows never reach the writer');
       expect(summary.headline, '2 imported, 0 updated, 0 skipped');
       expect(await isar.products.count(), 2);
     });
@@ -115,11 +116,10 @@ void main() {
       expect(product.totalStock, 45);
     });
 
-    test('stores barcode, sku and cost price when the file supplies them',
-        () async {
+    test('stores barcode and cost price when the file supplies them', () async {
       final parsed = CsvImportService.parseCsv(
-        'name,price,cost price,quantity,barcode,sku\n'
-        'Tomato Paste,55.00,48.00,100,5012345678900,TP-001',
+        'name,price,cost price,quantity,barcode\n'
+        'Tomato Paste,55.00,48.00,100,5012345678900',
       );
 
       await CsvImportService.importProductsWithSummary(
@@ -129,7 +129,6 @@ void main() {
 
       final product = (await isar.products.where().findFirst())!;
       expect(product.barcode, '5012345678900');
-      expect(product.sku, 'TP-001');
       expect(product.costPrice, 48.0);
       expect(product.price, 55.0, reason: 'selling price must not be the cost');
     });
@@ -168,20 +167,21 @@ void main() {
       expect(product.name, 'Milo 400g');
     });
 
-    test('a repeated sku updates even when the barcode changed', () async {
+    test('a repeated sku column updates even when the barcode changed',
+        () async {
       await CsvImportService.importProductsWithSummary(
         isar: isar,
         rows: CsvImportService.parseCsv(
-          'name,price,quantity,sku,barcode\n'
-          'Cola 300ml,7.50,24,COLA-300,A1',
+          'name,price,quantity,barcode\n'
+          'Cola 300ml,7.50,24,A1',
         ).rows,
       );
 
       final summary = await CsvImportService.importProductsWithSummary(
         isar: isar,
         rows: CsvImportService.parseCsv(
-          'name,price,quantity,sku,barcode\n'
-          'Cola 300ml,9.00,24,COLA-300,B2',
+          'name,price,quantity,barcode\n'
+          'Cola 300ml,9.00,24,B2',
         ).rows,
       );
 
@@ -189,7 +189,8 @@ void main() {
       expect(await isar.products.count(), 1);
       final product = (await isar.products.where().findFirst())!;
       expect(product.price, 9.0);
-      expect(product.barcode, 'B2', reason: 'the new barcode should be adopted');
+      expect(product.barcode, 'B2',
+          reason: 'the new barcode should be adopted');
     });
 
     test('falls back to case-insensitive name matching', () async {
@@ -221,13 +222,11 @@ void main() {
           'Milo 400g,32.00,45,B1\n'
           'Peak Milk,12.50,90,B2';
 
-      final first =
-          await CsvImportService.importProductsWithSummary(
+      final first = await CsvImportService.importProductsWithSummary(
         isar: isar,
         rows: CsvImportService.parseCsv(csv).rows,
       );
-      final second =
-          await CsvImportService.importProductsWithSummary(
+      final second = await CsvImportService.importProductsWithSummary(
         isar: isar,
         rows: CsvImportService.parseCsv(csv).rows,
       );
