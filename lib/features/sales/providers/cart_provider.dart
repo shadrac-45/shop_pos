@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:isar/isar.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
@@ -128,10 +128,50 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
 
   Future<void> _deductStock(Isar isar) async {
     for (var item in state) {
-      final batchToUpdate = await isar.batchs.get(item.batch.id);
-      if (batchToUpdate != null) {
-        batchToUpdate.quantity -= item.quantity;
-        await isar.batchs.put(batchToUpdate);
+      var remainingToDeduct = item.quantity;
+
+      // 1. Deduct from the selected batch first
+      final primaryBatch = await isar.batchs.get(item.batch.id);
+      if (primaryBatch != null) {
+        if (primaryBatch.quantity >= remainingToDeduct) {
+          primaryBatch.quantity -= remainingToDeduct;
+          remainingToDeduct = 0;
+          await isar.batchs.put(primaryBatch);
+        } else {
+          remainingToDeduct -= primaryBatch.quantity;
+          primaryBatch.quantity = 0;
+          await isar.batchs.put(primaryBatch);
+        }
+      }
+
+      // 2. If needed, deduct remaining quantity from other active batches of this product
+      if (remainingToDeduct > 0) {
+        final otherBatches = await isar.batchs
+            .filter()
+            .productIdEqualTo(item.product.id)
+            .quantityGreaterThan(0)
+            .sortByExpiryDate()
+            .findAll();
+
+        for (final b in otherBatches) {
+          if (b.id == item.batch.id) continue;
+          if (b.quantity >= remainingToDeduct) {
+            b.quantity -= remainingToDeduct;
+            remainingToDeduct = 0;
+            await isar.batchs.put(b);
+            break;
+          } else {
+            remainingToDeduct -= b.quantity;
+            b.quantity = 0;
+            await isar.batchs.put(b);
+          }
+        }
+      }
+
+      // 3. Touch the product to trigger collection listeners
+      final productToTouch = await isar.products.get(item.product.id);
+      if (productToTouch != null) {
+        await isar.products.put(productToTouch);
       }
     }
   }

@@ -23,6 +23,9 @@ dependencies:
   dio: ^5.4.0
   uuid: ^4.4.0
   shared_preferences: ^2.5.5
+  file_picker: ^13.1.0
+  excel: ^4.0.6
+  archive: ^3.6.1
 
 dev_dependencies:
   flutter_test:

@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Login Screen — ShopPOS
 /// ============================================
 /// Single, unified PIN-based authentication.
@@ -174,9 +174,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           await prefs.remove(_kFailedAttemptsKey);
           await prefs.remove(_kLockoutExpiryKey);
           if (!mounted) return;
-          Navigator.pushReplacement(
-            context,
+          Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (_) => const MainShellScreen()),
+            (_) => false,
           );
         }
 
@@ -188,6 +188,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         });
         context.showErrorSnackbar(
           'This account has been deactivated — please contact the shop owner.',
+        );
+
+      case LoginResult.lockedOut:
+        HapticFeedback.vibrate();
+        final remaining =
+            ref.read(currentUserProvider.notifier).lockoutSecondsRemaining;
+        setState(() {
+          _pin.fillRange(0, 4, '');
+          _currentIndex = 0;
+          _isLockedOut = true;
+          _lockoutSeconds = remaining > 0 ? remaining : 30;
+        });
+        _resumeLockoutCountdown();
+        context.showErrorSnackbar(
+          'Too many failed attempts. Keypad locked for ${_lockoutSeconds}s.',
         );
 
       case LoginResult.invalidPin:
@@ -220,9 +235,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (user != null && user.isActive) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          Navigator.pushReplacement(
-            context,
+          Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (_) => const MainShellScreen()),
+            (_) => false,
           );
         }
       });
@@ -252,10 +267,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              minHeight: screenHeight -
-                  mq.padding.top -
-                  mq.padding.bottom -
-                  AppSpacing.md * 2,
+              minHeight: (screenHeight -
+                      mq.padding.top -
+                      mq.padding.bottom -
+                      AppSpacing.md * 2)
+                  .clamp(0.0, double.infinity),
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,

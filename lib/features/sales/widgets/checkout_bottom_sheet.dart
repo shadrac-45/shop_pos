@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Checkout Bottom Sheet — ShopPOS
 /// ============================================
 /// Touch-first checkout drawer featuring:
@@ -14,6 +14,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
@@ -31,6 +32,7 @@ class CheckoutBottomSheet extends ConsumerStatefulWidget {
 
 class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
   String _selectedPayment = AppConstants.paymentCash;
+  bool _isCompleting = false;
 
   static const _paymentOptions = [
     (type: 'cash', icon: Icons.money_rounded, label: 'Cash'),
@@ -43,8 +45,12 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     final cartNotifier = ref.read(cartProvider.notifier);
     final currentUser = ref.watch(currentUserProvider);
 
-    if (cart.isEmpty) {
-      Navigator.pop(context);
+    if (cart.isEmpty && !_isCompleting) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+          Navigator.of(context).pop();
+        }
+      });
       return const SizedBox.shrink();
     }
 
@@ -250,10 +256,21 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
 
                 // Action Button
                 ElevatedButton.icon(
-                  onPressed: () => _completeSale(cartNotifier, total,
-                      cashierId: currentUser?.id ?? 0),
-                  icon: const Icon(Icons.check_circle_rounded),
-                  label: const Text('Complete Sale'),
+                  onPressed: _isCompleting
+                      ? null
+                      : () => _completeSale(cartNotifier, total,
+                          cashierId: currentUser?.id ?? 0),
+                  icon: _isCompleting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : const Icon(Icons.check_circle_rounded),
+                  label: Text(_isCompleting ? 'Completing Sale...' : 'Complete Sale'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: AppColors.textOnPrimary,
@@ -273,6 +290,8 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
   Future<void> _completeSale(
       CartNotifier cartNotifier, double totalAmount,
       {int cashierId = 0}) async {
+    if (_isCompleting) return;
+
     if (_selectedPayment == 'momo') {
       Navigator.pop(context);
       Navigator.of(context).push<bool>(
@@ -283,6 +302,11 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
       return;
     }
 
+    setState(() => _isCompleting = true);
+
+    // Record activity to reset inactivity timeout
+    ref.read(sessionManagerProvider).recordActivity();
+
     final success = await cartNotifier.completeSale(
       _selectedPayment,
       cashierId: cashierId,
@@ -291,9 +315,12 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     if (!mounted) return;
 
     if (success) {
-      Navigator.pop(context);
+      if (ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).pop();
+      }
       context.showSuccessSnackbar('Sale completed successfully!');
     } else {
+      setState(() => _isCompleting = false);
       context.showErrorSnackbar('Failed to complete sale. Please try again.');
     }
   }

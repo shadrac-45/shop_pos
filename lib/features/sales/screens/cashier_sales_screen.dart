@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Cashier Sales Screen — ShopPOS
 /// ============================================
 /// Touch-first point-of-sale interface featuring:
@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
@@ -21,11 +22,13 @@ import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/sales/providers/cart_provider.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
+import 'package:shop_pos/features/products/services/csv_import_service.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
 import 'package:shop_pos/features/shared/widgets/app_skeleton.dart';
 import 'package:shop_pos/features/sales/widgets/checkout_bottom_sheet.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/sales/screens/cashier_history_screen.dart';
 import 'package:shop_pos/features/sales/screens/mobile_scanner_screen.dart';
 
 class CashierSalesScreen extends ConsumerStatefulWidget {
@@ -131,7 +134,27 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
                 const SizedBox(width: AppSpacing.sm),
                 IconButton.filledTonal(
                   constraints: AppTouch.touchConstraints,
-                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 28),
+                  icon: const Icon(Icons.receipt_long_rounded, size: 24),
+                  tooltip: 'Sales History',
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppColors.cardBg,
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(color: AppColors.border),
+                  ),
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const CashierHistoryScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                IconButton.filledTonal(
+                  constraints: AppTouch.touchConstraints,
+                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 26),
+                  tooltip: 'Scan Barcode',
                   style: IconButton.styleFrom(
                     backgroundColor: AppColors.cardBg,
                     foregroundColor: AppColors.primary,
@@ -161,17 +184,25 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
                 if (filteredProducts.isEmpty) {
                   return AppEmptyState(
                     icon: Icons.search_off_rounded,
-                    title: 'No Products Found',
+                    title: _searchQuery.isNotEmpty ? 'No Products Found' : 'Catalog is Empty',
                     description: _searchQuery.isNotEmpty
                         ? 'No item matching "$_searchQuery". Try clearing your search.'
-                        : 'Your product catalog is empty.',
-                    actionLabel: _searchQuery.isNotEmpty ? 'Clear Search' : null,
+                        : 'Your product catalog is empty. Load sample products to begin selling.',
+                    actionLabel: _searchQuery.isNotEmpty ? 'Clear Search' : 'Load Sample Products',
                     onAction: _searchQuery.isNotEmpty
                         ? () {
                             _searchController.clear();
                             setState(() => _searchQuery = '');
                           }
-                        : null,
+                        : () async {
+                            HapticFeedback.mediumImpact();
+                            final isar = ref.read(isarProvider);
+                            final count = await CsvImportService.seedSampleProducts(isar);
+                            if (context.mounted) {
+                              context.showSuccessSnackbar('Loaded $count sample products into catalog!');
+                              ref.invalidate(productServiceProvider);
+                            }
+                          },
                   );
                 }
 

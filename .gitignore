@@ -52,3 +52,9 @@ android/.gradle/
 *.freezed.dart
 *.mocks.dart
 
+# Agent tooling (local state, worktree clones, and credentials)
+.kilo/
+.agents/
+devtools_options.yaml
+fix_script.ps1
+

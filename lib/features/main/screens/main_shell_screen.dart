@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Main Shell Screen — ShopPOS
 /// ============================================
 /// Navigation shell that switches between the
@@ -17,9 +17,10 @@ import 'package:shop_pos/core/constants/app_assets.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
-import 'package:shop_pos/features/auth/screens/login_screen.dart';
+import 'package:shop_pos/features/auth/screens/role_select_screen.dart';
 import 'package:shop_pos/features/products/screens/owner_products_screen.dart';
 import 'package:shop_pos/features/reports/screens/daily_report_screen.dart';
+import 'package:shop_pos/features/sales/screens/cashier_history_screen.dart';
 import 'package:shop_pos/features/sales/screens/cashier_sales_screen.dart';
 import 'package:shop_pos/features/settings/screens/settings_screen.dart';
 
@@ -82,6 +83,12 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
       body: CashierSalesScreen(),
     ),
     const _NavDestination(
+      label: 'My Sales',
+      icon: Icons.receipt_long_outlined,
+      selectedIcon: Icons.receipt_long_rounded,
+      body: CashierHistoryScreen(),
+    ),
+    const _NavDestination(
       label: 'Settings',
       icon: Icons.settings_outlined,
       selectedIcon: Icons.settings_rounded,
@@ -91,8 +98,9 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
 
   void _logout() {
     ref.read(currentUserProvider.notifier).logout();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const RoleSelectScreen()),
+      (_) => false,
     );
   }
 

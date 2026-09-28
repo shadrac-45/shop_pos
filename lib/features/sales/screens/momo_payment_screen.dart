@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Mobile Money (MoMo) Payment Screen — ShopPOS
 /// ============================================
 /// Implements Paystack Ghana Push-Payment Flow:
@@ -18,6 +18,7 @@ import 'package:uuid/uuid.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/features/sales/models/paystack_models.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/providers/cart_provider.dart';
@@ -195,11 +196,14 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
     if (!mounted) return;
 
     if (success) {
+      ref.read(sessionManagerProvider).recordActivity();
       HapticFeedback.heavyImpact();
       setState(() => _currentStep = MomoFlowStep.success);
       await Future.delayed(const Duration(seconds: 2));
       if (mounted) {
-        Navigator.of(context).pop(true);
+        if (ModalRoute.of(context)?.isCurrent == true) {
+          Navigator.of(context).pop(true);
+        }
         context.showSuccessSnackbar('MoMo Sale completed successfully!');
       }
     } else {

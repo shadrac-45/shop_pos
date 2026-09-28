@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Checkout Screen — ShopPOS
 /// ============================================
 /// Full-screen checkout route for payment
@@ -14,6 +14,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
+import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
@@ -74,6 +75,8 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     try {
       final currentUser = ref.read(currentUserProvider);
 
+      ref.read(sessionManagerProvider).recordActivity();
+
       final success = await ref
           .read(cartProvider.notifier)
           .completeSale(_selectedPayment,
@@ -91,7 +94,9 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
         // Auto-close after the success animation
         await Future.delayed(const Duration(seconds: 2));
         if (!mounted) return;
-        Navigator.of(context).pop();
+        if (ModalRoute.of(context)?.isCurrent == true) {
+          Navigator.of(context).pop();
+        }
       } else {
         setState(() => _isProcessing = false);
         context.showErrorSnackbar(

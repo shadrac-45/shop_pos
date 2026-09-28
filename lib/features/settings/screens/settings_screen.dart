@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Settings Screen — ShopPOS
 /// ============================================
 /// Clean, end-user facing screen for Cashiers and Owners.
@@ -29,6 +29,7 @@ import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
 import 'package:shop_pos/features/settings/screens/developer_debug_screen.dart';
 import 'package:shop_pos/features/settings/screens/manage_staff_screen.dart';
+import 'package:shop_pos/features/products/widgets/csv_import_dialog.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -80,6 +81,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (result == true && mounted) {
       context.showSuccessSnackbar('Your PIN has been updated successfully!');
     }
+  }
+
+  void _openCsvImportDialog() {
+    showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const CsvImportDialog(),
+    );
   }
 
   @override
@@ -203,6 +213,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   title: Text('Manage Staff'),
                   subtitle: Text(
                     'Create, deactivate & manage cashier accounts',
+                    style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                  ),
+                  trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+                ),
+              ),
+
+              const SizedBox(height: AppSpacing.xl),
+              const Text(
+                'INVENTORY & DATA',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textSecondary,
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              TouchableCard(
+                onTap: _openCsvImportDialog,
+                child: const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.file_upload_outlined, color: AppColors.primary),
+                  title: Text('Import Products (CSV)'),
+                  subtitle: Text(
+                    'Bulk import catalog & stock quantities from CSV or text',
                     style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
                   ),
                   trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),

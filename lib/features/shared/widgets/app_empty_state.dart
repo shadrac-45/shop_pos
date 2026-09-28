@@ -97,7 +97,8 @@ class AppEmptyState extends StatelessWidget {
             physics: const BouncingScrollPhysics(),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                minHeight: (constraints.maxHeight - AppSpacing.md * 2).clamp(0.0, double.infinity),
+                minHeight: (constraints.maxHeight - AppSpacing.md * 2)
+                    .clamp(0.0, double.infinity),
               ),
               child: Center(child: content),
             ),

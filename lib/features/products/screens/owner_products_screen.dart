@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Owner Products Screen — ShopPOS
 /// ============================================
 /// Touch-first product management interface:
@@ -12,16 +12,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
+import 'package:shop_pos/features/products/services/csv_import_service.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/core/utils/expiry_helpers.dart';
 import 'package:shop_pos/features/products/widgets/add_product_dialog.dart';
+import 'package:shop_pos/features/products/widgets/csv_import_dialog.dart';
 import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
 import 'package:shop_pos/features/shared/widgets/app_skeleton.dart';
 import 'package:shop_pos/features/products/widgets/edit_product_dialog.dart';
@@ -62,6 +66,19 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
     });
   }
 
+  void _showImportCsvDialog() {
+    showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const CsvImportDialog(),
+    ).then((count) {
+      if (count != null && count > 0) {
+        ref.invalidate(productServiceProvider);
+      }
+    });
+  }
+
   void _showRestockBatch(Product product) {
     showDialog(
       context: context,
@@ -69,6 +86,15 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
     ).then((_) {
       ref.invalidate(productServiceProvider);
     });
+  }
+
+  Future<void> _loadSampleProducts() async {
+    HapticFeedback.mediumImpact();
+    final isar = ref.read(isarProvider);
+    final count = await CsvImportService.seedSampleProducts(isar);
+    if (!mounted) return;
+    context.showSuccessSnackbar('Loaded $count sample products into catalog!');
+    ref.invalidate(productServiceProvider);
   }
 
   @override
@@ -157,6 +183,28 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
               ],
             ),
           ),
+          OutlinedButton.icon(
+            onPressed: _showImportCsvDialog,
+            icon: const Icon(Icons.file_upload_outlined, size: 18),
+            label: const Text('Import CSV / Excel'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: const BorderSide(color: AppColors.primary),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          ElevatedButton.icon(
+            onPressed: _showAddProduct,
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Add Product'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              elevation: 0,
+            ),
+          ),
         ],
       ),
     );
@@ -188,19 +236,97 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
 
   Widget _buildProductList(List<Product> products) {
     if (products.isEmpty) {
-      return AppEmptyState(
-        icon: Icons.inventory_2_outlined,
-        title: 'No Products Yet',
-        description: _searchQuery.isNotEmpty
-            ? 'No product matches "$_searchQuery".'
-            : 'Tap the "+ Add Product" button below to add your first product.',
-        actionLabel: _searchQuery.isNotEmpty ? 'Clear Search' : 'Add First Product',
-        onAction: _searchQuery.isNotEmpty
-            ? () {
-                _searchController.clear();
-                setState(() => _searchQuery = '');
-              }
-            : _showAddProduct,
+      if (_searchQuery.isNotEmpty) {
+        return AppEmptyState(
+          icon: Icons.search_off_rounded,
+          title: 'No Matching Products',
+          description: 'No product matches "$_searchQuery".',
+          actionLabel: 'Clear Search',
+          onAction: () {
+            _searchController.clear();
+            setState(() => _searchQuery = '');
+          },
+        );
+      }
+
+      return Center(
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl, vertical: AppSpacing.xxl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.inventory_2_outlined,
+                  size: 48,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'Your Inventory is Empty',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              const Text(
+                'Populate your catalog instantly with 8 retail products, import from CSV or Excel, or create items manually.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              ElevatedButton.icon(
+                onPressed: _showAddProduct,
+                icon: const Icon(Icons.add_rounded, size: 20),
+                label: const Text(
+                  'Add Product',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(270, 50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: AppSpacing.borderMd,
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              OutlinedButton.icon(
+                onPressed: _showImportCsvDialog,
+                icon: const Icon(Icons.file_upload_outlined, size: 20),
+                label: const Text('Import from CSV File'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: const BorderSide(color: AppColors.primary),
+                  minimumSize: const Size(270, 48),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: AppSpacing.borderMd,
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              TextButton.icon(
+                onPressed: _loadSampleProducts,
+                icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                label: const Text('Load Sample Demo Products (8 Items)'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary,
+                  minimumSize: const Size(270, 44),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
 

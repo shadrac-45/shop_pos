@@ -12,6 +12,24 @@ class Product {
   late String category;
   int quickButtonColor = 0xFF4CAF50; // default green
 
+  // Stable external identifier assigned on first catalog import. Lets a
+  // re-import of the same spreadsheet update rows instead of duplicating
+  // them, even when the product name is later edited by hand.
+  String? importUuid;
+
+  // Indexed so import can match a row by barcode/sku in O(log n) rather
+  // than scanning every product. Isar indexes skip null values, so
+  // products created without a barcode never collide here.
+  @Index()
+  String? barcode;
+
+  @Index()
+  String? sku;
+
+  // Purchase cost per unit. Distinct from [price] (the selling price) and
+  // only populated from spreadsheets that supply a cost column.
+  double? costPrice;
+
   @Backlink(to: 'product')
   final IsarLinks<Batch> batches = IsarLinks<Batch>();
 
