@@ -1,3 +1,8 @@
+> **Superseded.** ShopPOS Cloud now lives in the separate `POS-APP/backend` server (Express + PostgreSQL):
+> accounts, shop isolation, online sales, payments and sync. Tills connect to it from
+> Settings → Integrations → ShopPOS Cloud. This legacy server is kept only for tills still set to the
+> "Legacy sync server"; once none are, this folder can be deleted.
+
 # ShopPOS backend
 
 A small Node.js server the ShopPOS app talks to for two things:

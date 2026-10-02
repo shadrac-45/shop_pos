@@ -41,7 +41,10 @@ class AuthService {
   /// Replaces an old-format hash with bcrypt now that the PIN is known.
   static Future<void> upgradePinHashIfNeeded(Isar isar, AppUser user, String pin) async {
     if (!HashHelpers.needsRehash(user.pinHash)) return;
-    user.pinHash = await HashHelpers.hashPinAsync(pin);
+    user
+      ..pinHash = await HashHelpers.hashPinAsync(pin)
+      // Same PIN, new hash format: share it with the shop's other tills.
+      ..isSynced = false;
     await isar.writeTxn(() => isar.appUsers.put(user));
   }
 }

@@ -28,6 +28,7 @@ import 'package:shop_pos/features/sales/screens/cashier_history_screen.dart';
 import 'package:shop_pos/features/sales/screens/cashier_sales_screen.dart';
 import 'package:shop_pos/features/settings/screens/settings_screen.dart';
 import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
+import 'package:shop_pos/features/settings/widgets/cloud_section.dart' show SyncStatusChip;
 
 class _NavDestination {
   final String label;
@@ -203,6 +204,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
           ],
         ),
         actions: [
+          const Center(child: SyncStatusChip()),
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: AppColors.textSecondary),
             tooltip: 'Logout',

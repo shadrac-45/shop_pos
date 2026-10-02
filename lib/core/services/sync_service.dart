@@ -21,7 +21,19 @@
 ///    Remote sales never move stock themselves;
 ///    their stock movements do.
 ///
-/// PIN and password hashes are never sent.
+/// Two servers are supported:
+///  • ShopPOS Cloud (backend/ Express API, when
+///    this till is connected): device token,
+///    change-feed cursor, chunked pushes, and
+///    staff bcrypt PIN hashes so staff can sign
+///    in on any of the shop's tills.
+///  • the legacy sync server (API key): PIN and
+///    password hashes are never sent there.
+/// Owner/admin passwords never leave the device.
+///
+/// Every record carries its own UUID, so a push
+/// that is retried (timeout, crash, lost reply)
+/// is stored once: a sale is never duplicated.
 /// ============================================
 library;
 
@@ -49,10 +61,43 @@ class SyncResult {
   final String? error;
   final DateTime at;
 
-  const SyncResult({required this.pushed, required this.pulled, this.error, required this.at});
+  /// Records the cloud refused (e.g. invalid, or belonging to another
+  /// shop), and notes such as an unverified MoMo payment.
+  final int conflicts;
+  final int warnings;
+
+  /// True when the till has been disconnected from the cloud and must be
+  /// signed in again.
+  final bool unauthorized;
+
+  const SyncResult({
+    required this.pushed,
+    required this.pulled,
+    this.error,
+    required this.at,
+    this.conflicts = 0,
+    this.warnings = 0,
+    this.unauthorized = false,
+  });
 
   bool get ok => error == null;
 }
+
+/// Order in which collections are pushed: referenced records first.
+const cloudPushOrder = [
+  'users',
+  'products',
+  'batches',
+  'sales',
+  'saleItems',
+  'stockMovements',
+  'expenses',
+  'shifts',
+  'activityLogs',
+];
+
+/// Records per cloud push request (the server accepts up to 2000).
+const cloudChunkSize = 400;
 
 /// Collections a device downloads from the others.
 const pulledCollections = [
@@ -79,6 +124,9 @@ class SyncService {
   }) async {
     final now = DateTime.now();
     final settings = await isar.storeSettings.get(1) ?? StoreSettings();
+    if (settings.cloudDeviceToken.isNotEmpty && settings.cloudUrl.isNotEmpty) {
+      return cloudSync(isar, dio: dio, checkConnectivity: checkConnectivity);
+    }
     if (baseUrl.isEmpty || settings.syncServerKey.isEmpty) {
       return SyncResult(
           pushed: 0, pulled: 0, at: now,
@@ -162,6 +210,193 @@ class SyncService {
       debugPrint('[Sync] failed: $e\n$st');
       return SyncResult(pushed: 0, pulled: 0, at: now, error: '$e');
     }
+  }
+
+  /// Sync with ShopPOS Cloud. Push: everything not yet synced, in chunks,
+  /// in dependency order. Pull: the shop's change feed from [cloudCursor].
+  /// Local records are only marked synced after the server stored them,
+  /// and only if they weren't edited meanwhile. Never throws.
+  static Future<SyncResult> cloudSync(
+    Isar isar, {
+    Dio? dio,
+    bool checkConnectivity = true,
+  }) async {
+    final now = DateTime.now();
+    final settings = await isar.storeSettings.get(1) ?? StoreSettings();
+    if (checkConnectivity) {
+      final status = await Connectivity().checkConnectivity();
+      if (status.every((c) => c == ConnectivityResult.none)) {
+        return SyncResult(pushed: 0, pulled: 0, at: now, error: 'No internet connection.');
+      }
+    }
+    final client = dio ??
+        Dio(BaseOptions(
+          baseUrl: settings.cloudUrl.trim(),
+          connectTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 90),
+        ));
+    final options = Options(headers: {'x-device-token': settings.cloudDeviceToken});
+
+    try {
+      // ── Push ──
+      final changes = await collectChanges(isar, since: settings.lastSyncAt, forCloud: true);
+      var pushed = 0, conflicts = 0, warnings = 0;
+      for (final name in cloudPushOrder) {
+        final rows = changes.collections[name] ?? const [];
+        for (var i = 0; i < rows.length; i += cloudChunkSize) {
+          final chunk = rows.sublist(i, i + cloudChunkSize > rows.length ? rows.length : i + cloudChunkSize);
+          final r = await client.post<Map<String, dynamic>>(
+            '/sync/push',
+            data: {
+              // Lets the server answer a repeat of this exact request from
+              // its record instead of re-applying it.
+              'batchId': IdHelpers.newUuid(),
+              'collections': {name: chunk},
+            },
+            options: options,
+          );
+          final body = r.data ?? const {};
+          conflicts += (body['conflicts'] as List? ?? const []).length;
+          warnings += (body['warnings'] as List? ?? const []).length;
+          for (final c in body['conflicts'] as List? ?? const []) {
+            debugPrint('[Sync] refused by cloud: $c');
+          }
+          pushed += chunk.length;
+        }
+      }
+      // Refused records are marked synced too, so one bad record can't
+      // block the queue forever; the conflict count is shown to the user.
+      await _markSynced(isar, changes);
+
+      // ── Pull ──
+      var cursor = settings.cloudCursor;
+      var pulled = 0;
+      Map<String, dynamic>? shop;
+      for (var page = 0; page < 50; page++) {
+        final response = await client.get<Map<String, dynamic>>(
+          '/sync/pull',
+          queryParameters: {'cursor': cursor},
+          options: options,
+        );
+        final data = response.data ?? const {};
+        final remote = <String, List<Map<String, dynamic>>>{
+          for (final name in pulledCollections)
+            name: [
+              for (final r in data[name] as List? ?? const [])
+                Map<String, dynamic>.from(r as Map)
+            ],
+        };
+        pulled += await applyRemote(isar, remote);
+        shop = data['shop'] is Map ? Map<String, dynamic>.from(data['shop'] as Map) : shop;
+        cursor = data['cursor'] as String? ?? cursor;
+        // Saved after every page, so a dropped connection resumes here.
+        await isar.writeTxn(() async {
+          final s = await isar.storeSettings.get(1);
+          if (s != null) {
+            s.cloudCursor = cursor;
+            await isar.storeSettings.put(s);
+          }
+        });
+        if (data['hasMore'] != true) break;
+      }
+
+      await isar.writeTxn(() async {
+        final s = await isar.storeSettings.get(1);
+        if (s == null) return;
+        if (shop != null) _applyShop(s, shop);
+        s.lastSyncAt = now;
+        await isar.storeSettings.put(s);
+      });
+      return SyncResult(
+          pushed: pushed, pulled: pulled, at: now, conflicts: conflicts, warnings: warnings);
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final body = e.response?.data;
+      final message = status == 401
+          ? 'This till is no longer connected to the cloud. Sign in again in Settings → Integrations.'
+          : (body is Map ? body['message']?.toString() : null) ??
+              'Could not reach ShopPOS Cloud. Will retry automatically.';
+      debugPrint('[Sync] cloud: $message (${e.type})');
+      return SyncResult(pushed: 0, pulled: 0, at: now, error: message, unauthorized: status == 401);
+    } catch (e, st) {
+      debugPrint('[Sync] cloud failed: $e\n$st');
+      return SyncResult(pushed: 0, pulled: 0, at: now, error: 'Sync failed: $e');
+    }
+  }
+
+  /// Applies the cloud shop's settings when they changed online.
+  static void _applyShop(StoreSettings s, Map<String, dynamic> shop) {
+    final updated = _date(shop['updatedAt']);
+    if (updated == null ||
+        (s.cloudShopUpdatedAt != null && !updated.isAfter(s.cloudShopUpdatedAt!))) {
+      return;
+    }
+    s
+      ..cloudShopUpdatedAt = updated
+      ..cloudShopName = shop['name'] as String? ?? s.cloudShopName
+      ..storeName = shop['name'] as String? ?? s.storeName
+      ..currency = shop['currency'] as String? ?? s.currency
+      ..vatRate = _num(shop['vatRate']) ?? s.vatRate
+      ..pricesIncludeTax = shop['pricesIncludeTax'] as bool? ?? s.pricesIncludeTax;
+    final extra = shop['settings'];
+    if (extra is Map) {
+      s
+        ..storePhone = extra['storePhone'] as String? ?? s.storePhone
+        ..storeAddress = extra['storeAddress'] as String? ?? s.storeAddress
+        ..taxId = extra['taxId'] as String? ?? s.taxId
+        ..receiptFooter = extra['receiptFooter'] as String? ?? s.receiptFooter
+        ..enableCash = extra['enableCash'] as bool? ?? s.enableCash
+        ..enableCard = extra['enableCard'] as bool? ?? s.enableCard
+        ..enableMoMo = extra['enableMoMo'] as bool? ?? s.enableMoMo
+        ..enableQr = extra['enableQr'] as bool? ?? s.enableQr;
+    }
+  }
+
+  /// Fires when records that sync are written locally.
+  static List<Stream<void>> localChangeStreams(Isar isar) => [
+        isar.sales.watchLazy(),
+        isar.stockMovements.watchLazy(),
+        isar.products.watchLazy(),
+        isar.batchs.watchLazy(),
+        isar.expenses.watchLazy(),
+        isar.appUsers.watchLazy(),
+      ];
+
+  /// Number of local records waiting to be synced.
+  static Future<int> pendingCount(Isar isar) async {
+    final counts = await Future.wait([
+      isar.sales.filter().isSyncedEqualTo(false).count(),
+      isar.stockMovements.filter().isSyncedEqualTo(false).count(),
+      isar.products.filter().isSyncedEqualTo(false).count(),
+      isar.batchs.filter().isSyncedEqualTo(false).count(),
+      isar.expenses.filter().isSyncedEqualTo(false).count(),
+      isar.appUsers.filter().isSyncedEqualTo(false).count(),
+      isar.shifts.filter().isSyncedEqualTo(false).count(),
+    ]);
+    return counts.fold<int>(0, (s, c) => s + c);
+  }
+
+  /// Queues every local record for upload (after connecting to the cloud,
+  /// so the shop's history goes up once). Safe: the cloud stores each
+  /// record once however often it is sent.
+  static Future<void> markAllUnsynced(Isar isar) async {
+    await isar.writeTxn(() async {
+      Future<void> all<T>(IsarCollection<T> col, void Function(T) set) async {
+        final rows = await col.where().findAll();
+        for (final r in rows) {
+          set(r);
+        }
+        await col.putAll(rows);
+      }
+
+      await all<Product>(isar.products, (r) => r.isSynced = false);
+      await all<Batch>(isar.batchs, (r) => r.isSynced = false);
+      await all<Sale>(isar.sales, (r) => r.isSynced = false);
+      await all<StockMovement>(isar.stockMovements, (r) => r.isSynced = false);
+      await all<Expense>(isar.expenses, (r) => r.isSynced = false);
+      await all<Shift>(isar.shifts, (r) => r.isSynced = false);
+      await all<AppUser>(isar.appUsers, (r) => r.isSynced = false);
+    });
   }
 
   /// Checks that [baseUrl] is a ShopPOS sync server that accepts [apiKey].
@@ -255,9 +490,9 @@ class SyncService {
     return changed;
   }
 
-  /// Staff from other tills appear here (for names on receipts and
-  /// reports) but can't sign in on this device until the owner resets
-  /// their PIN here: PINs are never synced.
+  /// Staff from other tills appear here. With ShopPOS Cloud their bcrypt
+  /// PIN hash comes too, so they can sign in on this till; from the legacy
+  /// sync server (no hash) they can't until the owner resets their PIN here.
   static Future<int> _applyUsers(Isar isar, List<Map<String, dynamic>> rows) async {
     var changed = 0;
     for (final r in rows) {
@@ -269,6 +504,11 @@ class SyncService {
         ..uuid = uuid
         // Random, unguessable: no one can sign in until a PIN is set here.
         ..pinHash = HashHelpers.hashPin(IdHelpers.newUuid());
+      final pinHash = r['pinHash'];
+      if (pinHash is String && pinHash.startsWith(r'$2')) user.pinHash = pinHash;
+      final version = (r['credentialVersion'] as num?)?.toInt();
+      // A PIN reset elsewhere ends sessions here too.
+      if (version != null && version > user.credentialVersion) user.credentialVersion = version;
       user
         ..name = r['name'] as String? ?? 'Staff'
         ..role = r['role'] as String? ?? 'cashier'
@@ -528,7 +768,8 @@ class SyncService {
   // ════════════════════════════════════════════════════════════════════
 
   @visibleForTesting
-  static Future<SyncChangeSet> collectChanges(Isar isar, {DateTime? since}) async {
+  static Future<SyncChangeSet> collectChanges(Isar isar,
+      {DateTime? since, bool forCloud = false}) async {
     final products = await isar.products.filter().isSyncedEqualTo(false).findAll();
     final batches = await isar.batchs.filter().isSyncedEqualTo(false).findAll();
     final sales = await isar.sales.filter().isSyncedEqualTo(false).findAll();
@@ -573,6 +814,12 @@ class SyncService {
       expenseIds: expenses.map((e) => e.id).toList(),
       shiftIds: shifts.map((s) => s.id).toList(),
       userIds: users.map((u) => u.id).toList(),
+      stamps: {
+        'products': {for (final p in products) p.id: p.updatedAt},
+        'sales': {for (final s in sales) s.id: s.updatedAt},
+        'expenses': {for (final e in expenses) e.id: e.updatedAt},
+        'users': {for (final u in users) u.id: '${u.updatedAt}|${u.pinHash}|${u.isActive}'},
+      },
       collections: {
         'products': [
           for (final p in products)
@@ -701,7 +948,8 @@ class SyncService {
               'updatedAt': iso(s.closedAt ?? s.openedAt),
             }
         ],
-        // Names and roles only: credentials never leave the device.
+        // Names and roles; for the cloud also the bcrypt PIN hash (shop-wide
+        // staff sign-in). Passwords never leave the device.
         'users': [
           for (final u in users)
             {
@@ -709,7 +957,8 @@ class SyncService {
               'name': u.name,
               'role': u.role,
               'isActive': u.isActive,
-              'updatedAt': iso(u.updatedAt),
+              if (forCloud && u.pinHash.startsWith(r'$2')) 'pinHash': u.pinHash,
+              'updatedAt': iso(u.updatedAt ?? DateTime.now()),
             }
         ],
         'activityLogs': [
@@ -737,21 +986,34 @@ class SyncService {
 
   static Future<void> _markSynced(Isar isar, SyncChangeSet c) async {
     await isar.writeTxn(() async {
-      Future<void> mark<T>(IsarCollection<T> col, List<int> ids, void Function(T) set) async {
-        final rows = (await col.getAll(ids)).whereType<T>().toList();
+      // A record edited while the sync was running keeps isSynced = false,
+      // so the newer version goes up next time.
+      Future<void> mark<T>(IsarCollection<T> col, List<int> ids, void Function(T) set,
+          {String? stampKey, Object? Function(T)? stamp, int Function(T)? id}) async {
+        final before = stampKey == null ? null : c.stamps[stampKey];
+        final rows = (await col.getAll(ids))
+            .whereType<T>()
+            .where((r) => before == null || before[id!(r)] == stamp!(r))
+            .toList();
         for (final r in rows) {
           set(r);
         }
         await col.putAll(rows);
       }
 
-      await mark<Product>(isar.products, c.productIds, (r) => r.isSynced = true);
+      await mark<Product>(isar.products, c.productIds, (r) => r.isSynced = true,
+          stampKey: 'products', stamp: (r) => r.updatedAt, id: (r) => r.id);
       await mark<Batch>(isar.batchs, c.batchIds, (r) => r.isSynced = true);
-      await mark<Sale>(isar.sales, c.saleIds, (r) => r.isSynced = true);
+      await mark<Sale>(isar.sales, c.saleIds, (r) => r.isSynced = true,
+          stampKey: 'sales', stamp: (r) => r.updatedAt, id: (r) => r.id);
       await mark<StockMovement>(isar.stockMovements, c.movementIds, (r) => r.isSynced = true);
-      await mark<Expense>(isar.expenses, c.expenseIds, (r) => r.isSynced = true);
+      await mark<Expense>(isar.expenses, c.expenseIds, (r) => r.isSynced = true,
+          stampKey: 'expenses', stamp: (r) => r.updatedAt, id: (r) => r.id);
       await mark<Shift>(isar.shifts, c.shiftIds, (r) => r.isSynced = true);
-      await mark<AppUser>(isar.appUsers, c.userIds, (r) => r.isSynced = true);
+      await mark<AppUser>(isar.appUsers, c.userIds, (r) => r.isSynced = true,
+          stampKey: 'users',
+          stamp: (r) => '${r.updatedAt}|${r.pinHash}|${r.isActive}',
+          id: (r) => r.id);
     });
   }
 }
@@ -760,7 +1022,11 @@ class SyncChangeSet {
   final List<int> productIds, batchIds, saleIds, movementIds, expenseIds, shiftIds, userIds;
   final Map<String, List<Map<String, dynamic>>> collections;
 
+  /// Version of each record when it was collected, by collection and id.
+  final Map<String, Map<int, Object?>> stamps;
+
   SyncChangeSet({
+    this.stamps = const {},
     required this.productIds,
     required this.batchIds,
     required this.saleIds,

@@ -1,7 +1,10 @@
 /// ============================================
 /// Integrations Screen — ShopPOS
 /// ============================================
-/// Owner-only. Two separate servers:
+/// Owner-only.
+///  • ShopPOS Cloud: when this till is connected,
+///    the cloud does sync and Mobile Money, and
+///    the two legacy settings below are unused.
 ///  • Payment server: Mobile Money through
 ///    Paystack (required for MoMo).
 ///  • Cloud sync server (optional): shares sales,
@@ -25,6 +28,7 @@ import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/services/paystack_service.dart';
 import 'package:shop_pos/features/settings/screens/pending_momo_screen.dart';
+import 'package:shop_pos/features/settings/widgets/cloud_section.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 
@@ -201,6 +205,7 @@ class _IntegrationsScreenState extends ConsumerState<IntegrationsScreen> {
     final settings = ref.watch(storeSettingsProvider);
     final sync = ref.watch(syncProvider);
     final syncOn = ref.watch(syncConfiguredProvider);
+    final cloud = settings.cloudDeviceToken.isNotEmpty && settings.cloudUrl.isNotEmpty;
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
@@ -209,6 +214,17 @@ class _IntegrationsScreenState extends ConsumerState<IntegrationsScreen> {
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.lg),
           children: [
+            const CloudSection(),
+            if (cloud)
+              const Padding(
+                padding: EdgeInsets.only(top: AppSpacing.md),
+                child: Text(
+                  'Connected to the cloud: Mobile Money and sync go through it. '
+                  'The settings below are only used when the till is not connected.',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+              ),
+
             // ── Payment server ───────────────────────────────────────
             const SectionLabel('Payment server (Mobile Money)'),
             const Text(
@@ -236,7 +252,7 @@ class _IntegrationsScreenState extends ConsumerState<IntegrationsScreen> {
               label: const Text('Save & Test'),
             ),
             _status(_payOk, _payError, 'Payment server reachable.'),
-            if (settings.backendUrl.isEmpty)
+            if (settings.backendUrl.isEmpty && !cloud)
               const Padding(
                 padding: EdgeInsets.only(top: AppSpacing.sm),
                 child: Text('Mobile Money is off until a payment server is saved.',
@@ -256,7 +272,7 @@ class _IntegrationsScreenState extends ConsumerState<IntegrationsScreen> {
             ),
 
             // ── Sync server ──────────────────────────────────────────
-            const SectionLabel('Cloud sync server (optional)'),
+            const SectionLabel('Legacy sync server (optional)'),
             const Text(
               'Shares sales, stock and products between several tills and keeps a copy '
               'off this phone. This is a different server from the payment server. '

@@ -80,7 +80,9 @@ final enabledPaymentMethodsProvider = Provider<List<String>>((ref) {
 /// Backend base URL, or '' when none is configured. Debug builds fall
 /// back to the emulator address so local development needs no setup.
 final backendUrlProvider = Provider<String>((ref) {
-  final url = ref.watch(storeSettingsProvider).backendUrl.trim();
+  final s = ref.watch(storeSettingsProvider);
+  if (s.cloudDeviceToken.isNotEmpty && s.cloudUrl.trim().isNotEmpty) return s.cloudUrl.trim();
+  final url = s.backendUrl.trim();
   if (url.isNotEmpty) return url;
   return kDebugMode ? AppConstants.devBackendBaseUrl : '';
 });

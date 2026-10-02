@@ -71,6 +71,25 @@ class StoreSettings {
   /// Identifies this device to the sync server.
   String deviceId = '';
 
+  // ── ShopPOS Cloud ────────────────────────
+  /// Base URL of the ShopPOS cloud API, e.g. https://api.example.com/api.
+  /// Empty means this till is not connected to the cloud. When connected,
+  /// the cloud is used for both sync and Mobile Money.
+  String cloudUrl = '';
+
+  /// This till's device token (from the owner's cloud sign-in). Identifies
+  /// the till and its shop; never a server secret.
+  String cloudDeviceToken = '';
+
+  String cloudShopId = '';
+  String cloudShopName = '';
+
+  /// Pull position in the cloud change feed.
+  String cloudCursor = '';
+
+  /// When the cloud shop settings were last applied here.
+  DateTime? cloudShopUpdatedAt;
+
   DateTime? lastSyncAt;
   DateTime? lastBackupAt;
 

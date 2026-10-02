@@ -22,8 +22,14 @@ import 'package:shop_pos/features/sales/services/payment_gateway.dart';
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 final paystackServiceProvider = Provider<PaymentGateway>((ref) {
+  final settings = ref.watch(storeSettingsProvider);
+  // A cloud-connected till pays through the cloud, as its own shop.
+  if (settings.cloudDeviceToken.isNotEmpty && settings.cloudUrl.isNotEmpty) {
+    return PaystackService(
+        baseUrl: settings.cloudUrl.trim(), deviceToken: settings.cloudDeviceToken);
+  }
   final baseUrl = ref.watch(backendUrlProvider);
-  final apiKey = ref.watch(storeSettingsProvider).syncApiKey.trim();
+  final apiKey = settings.syncApiKey.trim();
   return PaystackService(baseUrl: baseUrl, apiKey: apiKey);
 });
 
@@ -42,6 +48,7 @@ class PaystackService implements PaymentGateway {
   PaystackService({
     required String baseUrl,
     String apiKey = '',
+    String deviceToken = '',
     @visibleForTesting HttpClientAdapter? httpAdapter,
   }) : _baseUrl = baseUrl {
     _dio = Dio(
@@ -52,7 +59,10 @@ class PaystackService implements PaymentGateway {
         receiveTimeout: const Duration(seconds: 30),
         headers: {
           'Content-Type': 'application/json',
-          if (apiKey.isNotEmpty) 'x-api-key': apiKey,
+          if (deviceToken.isNotEmpty)
+            'x-device-token': deviceToken
+          else if (apiKey.isNotEmpty)
+            'x-api-key': apiKey,
         },
       ),
     );
