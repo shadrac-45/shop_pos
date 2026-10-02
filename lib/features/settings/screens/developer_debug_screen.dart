@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Developer & Debug Panel — ShopPOS
 /// ============================================
 /// Dedicated diagnostic and configuration screen for
@@ -15,7 +15,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
-import 'package:shop_pos/features/settings/providers/backend_config_provider.dart';
+import 'package:shop_pos/core/providers/store_settings_provider.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/services/paystack_service.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 
@@ -87,10 +88,6 @@ class _DeveloperDebugScreenState extends ConsumerState<DeveloperDebugScreen> {
                 runSpacing: 6,
                 children: [
                   ActionChip(
-                    label: const Text('Host PC (10.68.171.116)', style: TextStyle(fontSize: 11)),
-                    onPressed: () => controller.text = 'http://10.68.171.116:3000/api',
-                  ),
-                  ActionChip(
                     label: const Text('Emulator (10.0.2.2)', style: TextStyle(fontSize: 11)),
                     onPressed: () => controller.text = 'http://10.0.2.2:3000/api',
                   ),
@@ -108,13 +105,22 @@ class _DeveloperDebugScreenState extends ConsumerState<DeveloperDebugScreen> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 final newUrl = controller.text.trim();
-                if (newUrl.isNotEmpty) {
-                  ref.read(backendUrlProvider.notifier).state = newUrl;
-                  Navigator.pop(ctx);
-                  _testBackendConnection();
+                if (newUrl.isEmpty) return;
+                try {
+                  await ref.read(storeSettingsProvider.notifier).edit(
+                        (s) => s.backendUrl = newUrl,
+                        user: ref.read(currentUserProvider),
+                        logDetails: 'Backend URL → $newUrl',
+                      );
+                } catch (e) {
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted) context.showErrorSnackbar('$e');
+                  return;
                 }
+                if (ctx.mounted) Navigator.pop(ctx);
+                _testBackendConnection();
               },
               child: const Text('Save & Test'),
             ),

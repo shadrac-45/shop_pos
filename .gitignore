@@ -58,3 +58,8 @@ android/.gradle/
 devtools_options.yaml
 fix_script.ps1
 
+
+# ShopPOS backend runtime data and secrets
+backend/data/
+backend/.env
+backend/node_modules/

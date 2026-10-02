@@ -9,13 +9,16 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:isar/isar.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/utils/id_helpers.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/core/utils/hash_helpers.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
+import 'package:shop_pos/features/products/models/stock_movement.dart';
 
 // ── State ────────────────────────────────────────────────────────
 
@@ -45,6 +48,8 @@ class WizardState {
   bool enableQr;
 
   // Step 4 — Staff
+  /// The owner's own PIN for the PIN keypad (replaces the seeded default).
+  String ownerPin;
   List<WizardStaffEntry> staff;
 
   // Step 5 — Inventory (CSV rows parsed)
@@ -72,6 +77,7 @@ class WizardState {
     this.enableCard = true,
     this.enableMoMo = true,
     this.enableQr = false,
+    this.ownerPin = '',
     List<WizardStaffEntry>? staff,
     List<Map<String, String>>? importedProducts,
     this.printerEnabled = false,
@@ -95,6 +101,7 @@ class WizardState {
     bool? enableCard,
     bool? enableMoMo,
     bool? enableQr,
+    String? ownerPin,
     List<WizardStaffEntry>? staff,
     List<Map<String, String>>? importedProducts,
     bool? printerEnabled,
@@ -116,6 +123,7 @@ class WizardState {
       enableCard: enableCard ?? this.enableCard,
       enableMoMo: enableMoMo ?? this.enableMoMo,
       enableQr: enableQr ?? this.enableQr,
+      ownerPin: ownerPin ?? this.ownerPin,
       staff: staff ?? this.staff,
       importedProducts: importedProducts ?? this.importedProducts,
       printerEnabled: printerEnabled ?? this.printerEnabled,
@@ -155,11 +163,52 @@ class SetupWizardNotifier extends Notifier<WizardState> {
     state = state.copyWith(staff: newList);
   }
 
+  static final _digits = RegExp(r'^\d+$');
+
+  static String? _pinProblem(String pin) {
+    if (pin.length < AppConstants.minPinLength ||
+        pin.length > AppConstants.maxPinLength ||
+        !_digits.hasMatch(pin)) {
+      return 'must be ${AppConstants.minPinLength}–${AppConstants.maxPinLength} digits';
+    }
+    if (AppConstants.defaultPins.contains(pin)) {
+      return 'is a default PIN — choose another';
+    }
+    return null;
+  }
+
+  /// Checks the owner PIN and staff rows. Returns a message describing
+  /// the first problem, or null if everything can be saved. Rows left
+  /// completely blank are ignored.
+  String? validateStaff() {
+    final s = state;
+    final ownerProblem = _pinProblem(s.ownerPin.trim());
+    if (ownerProblem != null) return 'Your owner PIN $ownerProblem.';
+
+    final seen = <String>{s.ownerPin.trim()};
+    for (final entry in s.staff) {
+      final name = entry.name.trim();
+      final pin = entry.pin.trim();
+      if (name.isEmpty && pin.isEmpty) continue;
+      if (name.isEmpty) return 'Enter a name for the staff member with PIN $pin.';
+      final problem = _pinProblem(pin);
+      if (problem != null) return "$name's PIN $problem.";
+      if (!seen.add(pin)) {
+        return "$name's PIN is already used by someone else. Every PIN must be different.";
+      }
+    }
+    return null;
+  }
+
   /// Persist everything to Isar and mark setup as complete.
   Future<void> saveAndComplete() async {
+    final problem = validateStaff();
+    if (problem != null) throw StateError(problem);
+
     final isar = ref.read(isarProvider);
     final s = state;
     AppUser? owner;
+    final now = DateTime.now();
 
     await isar.writeTxn(() async {
       // 1. Save StoreSettings
@@ -180,6 +229,7 @@ class SetupWizardNotifier extends Notifier<WizardState> {
         ..scannerEnabled = s.scannerEnabled
         ..cashDrawerEnabled = s.cashDrawerEnabled
         ..setupCompleted = true;
+      if (settings.deviceId.isEmpty) settings.deviceId = IdHelpers.newUuid();
       await isar.storeSettings.put(settings);
 
       // 2. Update or create admin owner account
@@ -189,7 +239,10 @@ class SetupWizardNotifier extends Notifier<WizardState> {
         ..name = 'Shop Owner'
         ..role = 'owner'
         ..isActive = true
-        ..pinHash = HashHelpers.hashPin('1234');
+        ..uuid = IdHelpers.newUuid();
+      owner!
+        ..pinHash = HashHelpers.hashPin(s.ownerPin.trim())
+        ..updatedAt = now;
       if (s.adminEmail.trim().isNotEmpty) {
         owner!.email = s.adminEmail.trim().toLowerCase();
       }
@@ -198,16 +251,27 @@ class SetupWizardNotifier extends Notifier<WizardState> {
       }
       await isar.appUsers.put(owner!);
 
-      // 3. Create staff accounts
+      // 3. Create staff accounts (validated above: named, unique PINs).
       for (final entry in s.staff) {
         final trimmedName = entry.name.trim();
         final trimmedPin = entry.pin.trim();
-        if (trimmedName.isEmpty || trimmedPin.length != 4) continue;
+        if (trimmedName.isEmpty) continue;
+        final pinHash = HashHelpers.hashPin(trimmedPin);
+        // Also unique against accounts already on this device.
+        final clash =
+            await isar.appUsers.filter().pinHashEqualTo(pinHash).findFirst();
+        if (clash != null && clash.id != owner!.id) {
+          throw StateError("$trimmedName's PIN is already used by ${clash.name}.");
+        }
         final staff = AppUser()
           ..name = trimmedName
-          ..role = entry.role
+          ..role = AppConstants.staffRoles.contains(entry.role)
+              ? entry.role
+              : AppConstants.roleCashier
           ..isActive = true
-          ..pinHash = HashHelpers.hashPin(trimmedPin);
+          ..pinHash = pinHash
+          ..uuid = IdHelpers.newUuid()
+          ..updatedAt = now;
         await isar.appUsers.put(staff);
       }
 
@@ -216,21 +280,35 @@ class SetupWizardNotifier extends Notifier<WizardState> {
         try {
           final price = double.tryParse(row['price'] ?? '') ?? 0.0;
           final qty = int.tryParse(row['quantity'] ?? '') ?? 0;
+          final name = (row['name'] ?? '').trim();
+          if (name.isEmpty) continue;
           final product = Product()
-            ..name = row['name'] ?? ''
+            ..name = name
             ..price = price
-            ..category = row['category'] ?? 'Uncategorized';
+            ..category = row['category'] ?? 'Uncategorized'
+            ..uuid = IdHelpers.newUuid()
+            ..updatedAt = now;
           final productId = await isar.products.put(product);
           if (qty > 0) {
-            final farFuture = DateTime.now().add(const Duration(days: 3650));
+            final farFuture = now.add(const Duration(days: 3650));
             final batch = Batch()
               ..productId = productId
               ..quantity = qty
               ..expiryDate = farFuture
-              ..restockDate = DateTime.now();
+              ..restockDate = now
+              ..uuid = IdHelpers.newUuid()
+              ..updatedAt = now;
             await isar.batchs.put(batch);
             batch.product.value = product;
             await batch.product.save();
+            await isar.stockMovements.put(StockMovement()
+              ..uuid = IdHelpers.newUuid()
+              ..productId = productId
+              ..batchId = batch.id
+              ..quantityChange = qty
+              ..type = StockMovementType.import
+              ..note = 'Setup wizard'
+              ..timestamp = now);
           }
         } catch (e) {
           debugPrint('[Wizard] Failed to import product row: $row — $e');

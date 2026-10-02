@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Reset PIN Dialog — ShopPOS
 /// ============================================
 /// Owner-only dialog to reset a cashier's 4-digit PIN.
@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
@@ -79,7 +80,7 @@ class _ResetPinDialogState extends ConsumerState<ResetPinDialog> {
         });
       case StaffOperationResult.invalidPin:
         setState(() {
-          _pinError = 'PIN must be 4 to 6 digits';
+          _pinError = 'PIN must be 4 to 6 digits and not a default PIN';
         });
       default:
         ScaffoldMessenger.of(context).showSnackBar(
@@ -215,6 +216,9 @@ class _ResetPinDialogState extends ConsumerState<ResetPinDialog> {
                   if (v == null || v.isEmpty) return 'Please enter a new PIN';
                   if (v.length < 4) {
                     return 'PIN must be at least 4 digits';
+                  }
+                  if (AppConstants.defaultPins.contains(v.trim())) {
+                    return 'Default PINs are not allowed';
                   }
                   return _pinError;
                 },

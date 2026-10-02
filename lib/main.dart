@@ -6,18 +6,18 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'package:shop_pos/core/models/store_settings.dart';
-import 'package:shop_pos/features/auth/models/app_user.dart';
-import 'package:shop_pos/features/products/models/batch.dart';
-import 'package:shop_pos/features/products/models/product.dart';
-import 'package:shop_pos/features/sales/models/sale.dart';
 import 'package:shop_pos/core/theme/app_theme.dart';
 import 'package:shop_pos/features/auth/screens/admin_login_screen.dart';
 import 'package:shop_pos/features/auth/screens/role_select_screen.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/database/migrations.dart';
+import 'package:shop_pos/core/database/schemas.dart';
+import 'package:shop_pos/core/providers/sync_provider.dart';
+import 'package:shop_pos/core/models/store_settings.dart';
+import 'package:shop_pos/core/services/stock_alert_service.dart';
 import 'package:shop_pos/core/services/notification_service.dart';
-import 'package:shop_pos/core/utils/hash_helpers.dart';
-import 'package:shop_pos/features/products/services/csv_import_service.dart';
+import 'package:shop_pos/core/services/session_manager.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 
 void main() {
   runZonedGuarded(
@@ -45,13 +45,7 @@ void main() {
       try {
         final dir = await getApplicationDocumentsDirectory();
         isar = await Isar.open(
-          [
-            ProductSchema,
-            BatchSchema,
-            SaleSchema,
-            AppUserSchema,
-            StoreSettingsSchema,
-          ],
+          allSchemas,
           directory: dir.path,
           inspector: kDebugMode,
         );
@@ -59,6 +53,8 @@ void main() {
         debugPrint('[ShopPOS] Isar.open() failed: $e\n$st');
         rethrow;
       }
+
+      await DataMigrations.run(isar);
 
       // Check if first-run setup has been completed
       bool setupCompleted = false;
@@ -69,20 +65,9 @@ void main() {
         debugPrint('[ShopPOS] Setup state check failed: $e');
       }
 
-      // Seed default users ONLY if the users table is genuinely empty.
-      // Never auto-wipe existing users.
-      try {
-        await _seedDefaultUsersIfEmpty(isar);
-      } catch (e, st) {
-        debugPrint('[ShopPOS] _seedDefaultUsersIfEmpty() failed: $e\n$st');
-      }
-
-      // Seed default product catalog ONLY if the products table is empty.
-      // Populates 8 sample Ghana retail items with stock batches.
-      try {
-        await _seedDefaultProductsIfEmpty(isar);
-      } catch (e, st) {
-        debugPrint('[ShopPOS] _seedDefaultProductsIfEmpty() failed: $e\n$st');
+      // Daily notification about expiring and low-stock products.
+      if (setupCompleted) {
+        unawaited(StockAlertService.notifyIfDue(isar, notificationService));
       }
 
       runApp(
@@ -102,55 +87,43 @@ void main() {
   );
 }
 
-/// Seeds the default owner/cashier accounts ONLY when the appUsers table
-/// is completely empty (i.e. a genuinely fresh install/DB).
-Future<void> _seedDefaultUsersIfEmpty(Isar isar) async {
-  final userCount = await isar.appUsers.count();
-  if (userCount > 0) {
-    return;
-  }
+/// Root navigator, so app-wide events (logout, inactivity timeout) can
+/// reset navigation without a BuildContext from the current screen.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
-  await isar.writeTxn(() async {
-    final owner = AppUser()
-      ..name = 'Shop Owner'
-      ..role = 'owner'
-      ..isActive = true
-      ..pinHash = HashHelpers.hashPin('1234');
-    await isar.appUsers.put(owner);
-
-    final cashier = AppUser()
-      ..name = 'Cashier'
-      ..role = 'cashier'
-      ..isActive = true
-      ..pinHash = HashHelpers.hashPin('0000');
-    await isar.appUsers.put(cashier);
-  });
-
-  debugPrint('[ShopPOS] Fresh install detected — seeded owner + cashier.');
-}
-
-/// Seeds sample Ghana retail products with stock batches ONLY when
-/// the products table is completely empty.
-Future<void> _seedDefaultProductsIfEmpty(Isar isar) async {
-  final productCount = await isar.products.count();
-  if (productCount > 0) {
-    return;
-  }
-
-  final imported = await CsvImportService.seedSampleProducts(isar);
-  debugPrint('[ShopPOS] Fresh catalog detected — seeded $imported sample products.');
-}
-
-class ShopPOSApp extends StatelessWidget {
+class ShopPOSApp extends ConsumerWidget {
   final bool setupCompleted;
   const ShopPOSApp({super.key, required this.setupCompleted});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Single logout path: whenever the signed-in user is cleared (sign-out
+    // button, Settings, or the inactivity timeout), go back to the role
+    // picker and drop every screen and dialog that was open.
+    ref.listen(currentUserProvider, (previous, next) {
+      if (previous != null && next == null) {
+        rootNavigatorKey.currentState?.pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const RoleSelectScreen()),
+          (_) => false,
+        );
+      }
+    });
+
+    // Keeps cloud sync running in the background (it starts and stops
+    // itself as users sign in and out).
+    ref.listen(syncProvider, (_, __) {});
+
     return MaterialApp(
       title: 'ShopPOS',
       debugShowCheckedModeBanner: false,
+      navigatorKey: rootNavigatorKey,
       theme: AppTheme.lightTheme,
+      // Any touch anywhere counts as activity for the inactivity timeout.
+      builder: (context, child) => Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => ref.read(sessionManagerProvider).recordActivity(),
+        child: child,
+      ),
       // ── Routing ─────────────────────────────────────────────
       // First launch (setup not done) → Admin email+pass login → Wizard
       // Subsequent launches (setup done) → Role selector login screen

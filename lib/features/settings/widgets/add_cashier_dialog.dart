@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Add Cashier Dialog — ShopPOS
 /// ============================================
 /// Owner-only dialog to create a new cashier account.
@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/settings/providers/staff_provider.dart';
@@ -30,6 +31,7 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
   final _confirmPinController = TextEditingController();
 
   bool _obscurePin = true;
+  String _role = AppConstants.roleCashier;
   bool _isCreating = false;
   String? _pinError;
 
@@ -91,6 +93,7 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
     final result = await service.createCashier(
       name: _nameController.text,
       pin: pin,
+      role: _role,
     );
 
     if (!mounted) return;
@@ -107,7 +110,7 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
         });
       case StaffOperationResult.invalidPin:
         setState(() {
-          _pinError = 'PIN must be 4 to 6 digits';
+          _pinError = 'PIN must be 4 to 6 digits and not a default PIN';
         });
       case StaffOperationResult.unauthorized:
         ScaffoldMessenger.of(context).showSnackBar(
@@ -244,6 +247,35 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
 
                 const SizedBox(height: AppSpacing.md),
 
+                DropdownButtonFormField<String>(
+                  initialValue: _role,
+                  decoration: _fieldDecoration(
+                    label: 'Role',
+                    hint: '',
+                    prefixIcon: Icons.work_outline_rounded,
+                  ),
+                  items: [
+                    for (final r in AppConstants.staffRoles)
+                      DropdownMenuItem(value: r, child: Text(AppConstants.roleLabel(r))),
+                  ],
+                  onChanged: (v) => setState(() => _role = v ?? _role),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, left: 4),
+                  child: Text(
+                    switch (_role) {
+                      AppConstants.roleManager =>
+                        'Sells, discounts, voids/refunds, manages stock and products, sees reports and expenses.',
+                      AppConstants.roleStockClerk =>
+                        'Restocks and adjusts stock only. Cannot sell or see reports.',
+                      _ => 'Sells and sees their own sales history.',
+                    },
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                  ),
+                ),
+
+                const SizedBox(height: AppSpacing.md),
+
                 // Cashier PIN
                 TextFormField(
                   controller: _pinController,
@@ -303,6 +335,9 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
                     }
                     if (v.trim().length < 4) {
                       return 'PIN must be at least 4 digits';
+                    }
+                    if (AppConstants.defaultPins.contains(v.trim())) {
+                      return 'Default PINs are not allowed';
                     }
                     return _pinError;
                   },

@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Manage Staff Screen — ShopPOS
 /// ============================================
 /// Owner-only screen for creating, viewing, and
@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
@@ -57,7 +58,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
     );
     if (result == true) {
       await _loadCashiers();
-      if (mounted) context.showSuccessSnackbar('Cashier account created successfully!');
+      if (mounted) context.showSuccessSnackbar('Staff account created.');
     }
   }
 
@@ -115,6 +116,39 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
     }
   }
 
+  Future<void> _changeRole(AppUser member) async {
+    final role = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('Role for ${member.name}'),
+        children: [
+          for (final r in AppConstants.staffRoles)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, r),
+              child: Row(
+                children: [
+                  Icon(r == member.role
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(AppConstants.roleLabel(r)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (role == null || role == member.role) return;
+    final result = await ref.read(staffProvider).changeRole(member.id, role);
+    if (!mounted) return;
+    if (result == StaffOperationResult.success) {
+      context.showSuccessSnackbar('${member.name} is now a ${AppConstants.roleLabel(role)}.');
+      await _loadCashiers();
+    } else {
+      context.showErrorSnackbar('Could not change the role.');
+    }
+  }
+
   Future<void> _openResetPinDialog(AppUser cashier) async {
     final result = await showDialog<bool>(
       context: context,
@@ -147,7 +181,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
         foregroundColor: AppColors.textOnPrimary,
         icon: const Icon(Icons.person_add_rounded),
         label: const Text(
-          'Add Cashier',
+          'Add Staff',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
       ),
@@ -202,7 +236,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
             ElevatedButton.icon(
               onPressed: _openAddCashierDialog,
               icon: const Icon(Icons.person_add_rounded),
-              label: const Text('Add First Cashier'),
+              label: const Text('Add First Staff Member'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: AppColors.textOnPrimary,
@@ -400,13 +434,14 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  const Row(
+                  Row(
                     children: [
-                      Icon(Icons.pin_rounded, size: 12, color: AppColors.textMuted),
-                      SizedBox(width: 4),
+                      const Icon(Icons.work_outline_rounded,
+                          size: 12, color: AppColors.textMuted),
+                      const SizedBox(width: 4),
                       Text(
-                        'PIN Login Protected',
-                        style: TextStyle(
+                        '${AppConstants.roleLabel(cashier.role)} · PIN login',
+                        style: const TextStyle(
                           color: AppColors.textSecondary,
                           fontSize: 12,
                         ),
@@ -431,9 +466,23 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
                     _toggleActivation(cashier);
                   case _CashierAction.resetPin:
                     _openResetPinDialog(cashier);
+                  case _CashierAction.changeRole:
+                    _changeRole(cashier);
                 }
               },
               itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: _CashierAction.changeRole,
+                  child: Row(
+                    children: [
+                      Icon(Icons.work_outline_rounded,
+                          size: 18, color: AppColors.primary),
+                      SizedBox(width: AppSpacing.sm),
+                      Text('Change role',
+                          style: TextStyle(color: AppColors.textPrimary)),
+                    ],
+                  ),
+                ),
                 const PopupMenuItem(
                   value: _CashierAction.resetPin,
                   child: Row(
@@ -476,4 +525,4 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
   }
 }
 
-enum _CashierAction { toggleActive, resetPin }
+enum _CashierAction { toggleActive, resetPin, changeRole }

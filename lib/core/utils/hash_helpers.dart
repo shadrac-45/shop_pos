@@ -16,6 +16,7 @@ library;
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
 
 class HashHelpers {
   HashHelpers._();
@@ -43,6 +44,11 @@ class HashHelpers {
   static bool verifyPin(String rawPin, String storedHash) {
     return hashPin(rawPin) == storedHash;
   }
+
+  /// True if [storedHash] is the hash of one of the publicly known
+  /// default PINs seeded on a fresh install.
+  static bool isDefaultPinHash(String storedHash) =>
+      AppConstants.defaultPins.any((pin) => hashPin(pin) == storedHash);
 
   // ── Password Hashing (staff accounts created by Owner) ─
 

@@ -61,6 +61,9 @@ class DateHelpers {
         date.day == now.day;
   }
 
+  static bool isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
   /// Get the start of a given day (midnight).
   static DateTime startOfDay(DateTime date) {
     return DateTime(date.year, date.month, date.day);

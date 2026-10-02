@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Add Product Dialog — ShopPOS
 /// ============================================
 /// Dialog for owners to add a new product.
@@ -16,9 +16,11 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
-import 'package:shop_pos/features/products/models/batch.dart';
-import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/products/services/inventory_service.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/features/products/widgets/base_product_dialog.dart';
@@ -99,7 +101,7 @@ class _AddProductDialogState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                buildLabel('Price (GH₵) *'),
+                buildLabel('Price (${CurrencyHelpers.symbol}) *'),
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _priceController,
@@ -145,6 +147,9 @@ class _AddProductDialogState
         onSelect: (index) => setState(() => _selectedColorIndex = index),
       ),
 
+      const SizedBox(height: 14),
+      ...buildInventoryFields(),
+
       const SizedBox(height: 20),
       const Divider(color: AppColors.border),
       const SizedBox(height: 8),
@@ -173,6 +178,11 @@ class _AddProductDialogState
                   style: const TextStyle(color: AppColors.textPrimary),
                   decoration: inputDecoration(hint: '0'),
                   keyboardType: TextInputType.number,
+                  validator: (v) => (v == null ||
+                          v.trim().isEmpty ||
+                          (int.tryParse(v.trim()) ?? -1) >= 0)
+                      ? null
+                      : 'Whole number',
                 ),
               ],
             ),
@@ -249,40 +259,27 @@ class _AddProductDialogState
 
     setState(() => isLoading = true);
 
-    final isar = ref.read(isarProvider);
     final productName = _nameController.text.trim();
 
     try {
-      await isar.writeTxn(() async {
-        final product = Product()
-          ..name = productName
-          ..price = double.parse(_priceController.text.trim())
-          ..category = _categoryController.text.trim().isEmpty
-              ? 'General'
-              : _categoryController.text.trim()
-          ..quickButtonColor =
-              AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32();
-
-        final productId = await isar.products.put(product);
-
-        final qtyText = _qtyController.text.trim();
-        if (qtyText.isNotEmpty) {
-          final quantity = int.parse(qtyText);
-          if (quantity > 0) {
-            final batch = Batch()
-              ..productId = productId
-              ..quantity = quantity
-              ..expiryDate = _selectedExpiry
-              ..restockDate = DateTime.now()
-              ..supplierNote = _noteController.text.trim().isEmpty
-                  ? null
-                  : _noteController.text.trim();
-            await isar.batchs.put(batch);
-            batch.product.value = product;
-            await batch.product.save();
-          }
-        }
-      });
+      await InventoryService.createProduct(
+        ref.read(isarProvider),
+        ref.read(currentUserProvider),
+        ProductInput(
+          name: productName,
+          price: double.parse(_priceController.text.trim()),
+          category: _categoryController.text,
+          quickButtonColor:
+              AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32(),
+          costPrice: costValue,
+          barcode: barcodeController.text,
+          sku: skuController.text,
+          reorderLevel: reorderValue,
+        ),
+        initialQuantity: int.tryParse(_qtyController.text.trim()) ?? 0,
+        expiryDate: _selectedExpiry,
+        supplierNote: _noteController.text,
+      );
 
       if (mounted) {
         // Refresh product stream
@@ -294,7 +291,7 @@ class _AddProductDialogState
     } catch (e) {
       if (mounted) {
         setState(() => isLoading = false);
-        context.showErrorSnackbar('Error: $e');
+        context.showErrorSnackbar(errorMessage(e));
       }
     } finally {
       if (mounted) setState(() => isLoading = false);

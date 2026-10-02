@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
@@ -21,7 +22,9 @@ import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/models/sale.dart';
 import 'package:shop_pos/features/sales/providers/cashier_sales_provider.dart';
 import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
+import 'package:shop_pos/features/sales/screens/sale_detail_screen.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 
 class CashierHistoryScreen extends ConsumerStatefulWidget {
   const CashierHistoryScreen({super.key});
@@ -221,7 +224,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                                 CashierSalesPeriod.today, 'Today'),
                             const SizedBox(width: 8),
                             _buildPeriodChip(
-                                CashierSalesPeriod.week, 'This Week'),
+                                CashierSalesPeriod.week, 'Last 7 Days'),
                             const SizedBox(width: 8),
                             _buildPeriodChip(
                                 CashierSalesPeriod.all, 'All Time'),
@@ -320,7 +323,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                           const SizedBox(width: AppSpacing.sm),
                           Expanded(
                             child: _buildKpiPill(
-                              label: 'MoMo (${stats.momoCount})',
+                              label: 'MoMo/Card/QR (${stats.momoCount})',
                               value: CurrencyHelpers.formatCompact(
                                   stats.momoRevenue),
                               icon: Icons.phone_android_rounded,
@@ -452,8 +455,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
       items = jsonDecode(sale.itemsJson);
     } catch (_) {}
 
-    final isCash = sale.paymentType == 'cash';
-    final payColor = isCash ? AppColors.cashColor : AppColors.momoColor;
+    final payColor = paymentColor(sale.paymentType);
     final totalItemsCount = items.fold<int>(
       0,
       (sum, item) => sum + ((item['quantity'] as num?)?.toInt() ?? 1),
@@ -478,9 +480,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                   borderRadius: AppSpacing.borderMd,
                 ),
                 child: Icon(
-                  isCash
-                      ? Icons.payments_rounded
-                      : Icons.phone_android_rounded,
+                  paymentIcon(sale.paymentType),
                   color: payColor,
                   size: 20,
                 ),
@@ -495,7 +495,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                     Row(
                       children: [
                         Text(
-                          'Sale #${sale.id}',
+                          sale.receiptNumber,
                           style: const TextStyle(
                             color: AppColors.textPrimary,
                             fontWeight: FontWeight.w800,
@@ -513,7 +513,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                             borderRadius: AppSpacing.borderSm,
                           ),
                           child: Text(
-                            isCash ? 'CASH' : 'MOMO',
+                            AppConstants.paymentLabel(sale.paymentType).toUpperCase(),
                             style: TextStyle(
                               color: payColor,
                               fontSize: 10,
@@ -521,6 +521,13 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                             ),
                           ),
                         ),
+                        if (sale.status != SaleStatus.completed) ...[
+                          const SizedBox(width: 6),
+                          StatusPill(
+                            sale.status.replaceAll('_', ' '),
+                            color: sale.isVoided ? AppColors.danger : AppColors.warning,
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 3),
@@ -589,7 +596,8 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
               final name = item['productName'] ?? 'Product';
               final qty = item['quantity'] ?? 1;
               final price = (item['price'] as num?)?.toDouble() ?? 0.0;
-              final subtotal = qty * price;
+              final subtotal =
+                  (item['lineTotal'] as num?)?.toDouble() ?? qty * price;
 
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
@@ -631,6 +639,16 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                 ),
               );
             }),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => SaleDetailScreen(saleId: sale.id),
+                )),
+                icon: const Icon(Icons.receipt_long_rounded, size: 18),
+                label: const Text('Open receipt'),
+              ),
+            ),
             if (sale.momoPhone != null && sale.momoPhone!.isNotEmpty) ...[
               const SizedBox(height: 6),
               Row(

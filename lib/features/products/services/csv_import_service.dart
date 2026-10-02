@@ -18,6 +18,7 @@ import 'package:uuid/uuid.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/products/models/stock_movement.dart';
 import 'package:shop_pos/features/products/services/product_import_parser.dart';
 
 /// Supported file extensions for product catalog import.
@@ -317,12 +318,17 @@ This Way Chocolate Drink,2.50,150,Beverages''';
               existing.costPrice = row.costPrice;
             }
             existing.importUuid ??= _uuid.v4();
+            existing
+              ..uuid ??= existing.importUuid
+              ..updatedAt = DateTime.now()
+              ..isSynced = false;
             productId = await isar.products.put(existing);
             productToUse = existing;
             updated++;
             debugPrint(
                 '[CsvImportService] Updated "$row.name" matched on $matchedOn');
           } else {
+            final importUuid = _uuid.v4();
             final product = Product()
               ..name = row.name
               ..price = row.price
@@ -330,7 +336,9 @@ This Way Chocolate Drink,2.50,150,Beverages''';
               ..barcode = row.barcode
               ..sku = row.sku
               ..costPrice = row.costPrice
-              ..importUuid = _uuid.v4()
+              ..importUuid = importUuid
+              ..uuid = importUuid
+              ..updatedAt = DateTime.now()
               ..quickButtonColor =
                   palette[imported % palette.length].toARGB32();
 
@@ -345,11 +353,22 @@ This Way Chocolate Drink,2.50,150,Beverages''';
               ..quantity = row.quantity
               ..expiryDate = row.expiryDate ?? farFuture
               ..restockDate = DateTime.now()
-              ..supplierNote = 'Imported';
+              ..supplierNote = 'Imported'
+              ..unitCost = row.costPrice
+              ..uuid = _uuid.v4()
+              ..updatedAt = DateTime.now();
 
             await isar.batchs.put(batch);
             batch.product.value = productToUse;
             await batch.product.save();
+            await isar.stockMovements.put(StockMovement()
+              ..uuid = _uuid.v4()
+              ..productId = productId
+              ..batchId = batch.id
+              ..quantityChange = row.quantity
+              ..type = StockMovementType.import
+              ..note = 'Spreadsheet import'
+              ..timestamp = DateTime.now());
           }
         } catch (e) {
           skipped++;

@@ -1,5 +1,3 @@
-// ignore_for_file: unused_import
-
 /// ============================================
 /// Admin Login Screen — ShopPOS
 /// ============================================
@@ -11,6 +9,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
@@ -51,8 +50,12 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
       setState(() => _errorMsg = 'Enter both email and password.');
       return;
     }
-    if (pass.length < 4) {
-      setState(() => _errorMsg = 'Password must be at least 4 characters.');
+    // New passwords must be strong; existing ones are only checked against
+    // the stored hash.
+    if (!widget.setupAlreadyDone &&
+        pass.length < AdminAuthService.minPasswordLength) {
+      setState(() => _errorMsg =
+          'Password must be at least ${AdminAuthService.minPasswordLength} characters.');
       return;
     }
     setState(() {
@@ -235,22 +238,162 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     );
   }
 
-  void _showForgotHint(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Password Recovery'),
-        content: const Text(
-          'To reset the admin password, uninstall and reinstall the app, '
-          'then complete the setup wizard again with a new password.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
+  Future<void> _showForgotHint(BuildContext context) async {
+    if (!widget.setupAlreadyDone) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Password Recovery'),
+          content: const Text(
+            'This is first-time setup: choose the email and password you '
+            'want to use for the admin account.',
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final reset = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ResetPasswordDialog(initialEmail: _emailCtrl.text.trim()),
+    );
+    if (reset == true && mounted) {
+      setState(() => _errorMsg = null);
+      ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(
+        content: Text('Password reset. Sign in with your new password.'),
+        backgroundColor: AppColors.success,
+      ));
+    }
+  }
+}
+
+/// Reset the admin password using the owner PIN as proof of identity.
+class _ResetPasswordDialog extends ConsumerStatefulWidget {
+  final String initialEmail;
+  const _ResetPasswordDialog({required this.initialEmail});
+
+  @override
+  ConsumerState<_ResetPasswordDialog> createState() =>
+      _ResetPasswordDialogState();
+}
+
+class _ResetPasswordDialogState extends ConsumerState<_ResetPasswordDialog> {
+  late final _emailCtrl = TextEditingController(text: widget.initialEmail);
+  final _pinCtrl = TextEditingController();
+  final _passCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _pinCtrl.dispose();
+    _passCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_passCtrl.text != _confirmCtrl.text) {
+      setState(() => _error = 'The new passwords do not match.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final result = await AdminAuthService.resetPasswordWithPin(
+      ref.read(isarProvider),
+      email: _emailCtrl.text,
+      ownerPin: _pinCtrl.text,
+      newPassword: _passCtrl.text,
+    );
+    if (!mounted) return;
+    switch (result) {
+      case PasswordResetResult.success:
+        Navigator.of(context).pop(true);
+        return;
+      case PasswordResetResult.invalidCredentials:
+        _error = 'Email or owner PIN is incorrect.';
+      case PasswordResetResult.defaultPin:
+        _error = 'Your owner PIN is still the default PIN, so it cannot be '
+            'used to reset the password. Contact ShopPOS support.';
+      case PasswordResetResult.weakPassword:
+        _error = 'Password must be at least '
+            '${AdminAuthService.minPasswordLength} characters.';
+    }
+    setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Reset Admin Password'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Confirm it is you with your owner PIN, then choose a new password.',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextField(
+              controller: _emailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Admin email'),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: _pinCtrl,
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              maxLength: AppConstants.maxPinLength,
+              decoration: const InputDecoration(labelText: 'Owner PIN'),
+            ),
+            TextField(
+              controller: _passCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'New password'),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: _confirmCtrl,
+              obscureText: true,
+              decoration:
+                  const InputDecoration(labelText: 'Confirm new password'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(_error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+            ],
+          ],
+        ),
       ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _saving ? null : _submit,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Reset Password'),
+        ),
+      ],
     );
   }
 }

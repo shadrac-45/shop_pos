@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Base Product Dialog — ShopPOS
 /// ============================================
 /// Abstract superclass for Add and Edit product
@@ -15,6 +15,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/features/products/models/product.dart';
 
 /// Abstract base [ConsumerStatefulWidget] for product form dialogs.
 /// Subclasses must override [buildDialogTitle] and [buildFormFields].
@@ -40,6 +42,85 @@ abstract class BaseProductDialogState<T extends BaseProductDialog>
   // ── Shared state ──────────────────────────────────────────────────
   final GlobalKey<FormState> formKey = GlobalKey<FormState>();
   bool isLoading = false;
+
+  // Fields shared by Add and Edit (see [buildInventoryFields]).
+  final costController = TextEditingController();
+  final barcodeController = TextEditingController();
+  final skuController = TextEditingController();
+  final reorderController = TextEditingController();
+
+  @override
+  void dispose() {
+    costController.dispose();
+    barcodeController.dispose();
+    skuController.dispose();
+    reorderController.dispose();
+    super.dispose();
+  }
+
+  /// Fills the shared fields from an existing product.
+  void loadInventoryFields(Product p) {
+    costController.text = p.costPrice?.toStringAsFixed(2) ?? '';
+    barcodeController.text = p.barcode ?? '';
+    skuController.text = p.sku ?? '';
+    reorderController.text = p.reorderLevel > 0 ? '${p.reorderLevel}' : '';
+  }
+
+  double? get costValue {
+    final t = costController.text.trim();
+    return t.isEmpty ? null : double.tryParse(t);
+  }
+
+  int get reorderValue => int.tryParse(reorderController.text.trim()) ?? 0;
+
+  /// Cost price, barcode, SKU and reorder level.
+  List<Widget> buildInventoryFields() {
+    Widget half(String label, TextEditingController c, String hint,
+            {TextInputType? keyboard, FormFieldValidator<String>? validator}) =>
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              buildLabel(label),
+              const SizedBox(height: 6),
+              TextFormField(
+                controller: c,
+                style: const TextStyle(color: AppColors.textPrimary),
+                decoration: inputDecoration(hint: hint),
+                keyboardType: keyboard,
+                validator: validator,
+              ),
+            ],
+          ),
+        );
+
+    return [
+      Row(
+        children: [
+          half('Cost price (${CurrencyHelpers.symbol})', costController, 'Optional',
+              keyboard: const TextInputType.numberWithOptions(decimal: true),
+              validator: (v) => (v == null || v.trim().isEmpty || double.tryParse(v.trim()) != null)
+                  ? null
+                  : 'Invalid'),
+          const SizedBox(width: 12),
+          half('Low-stock alert at', reorderController, 'e.g. 10',
+              keyboard: TextInputType.number,
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty || int.tryParse(v.trim()) != null)
+                      ? null
+                      : 'Whole number'),
+        ],
+      ),
+      const SizedBox(height: 14),
+      Row(
+        children: [
+          half('Barcode', barcodeController, 'Scan or type'),
+          const SizedBox(width: 12),
+          half('SKU', skuController, 'Optional'),
+        ],
+      ),
+    ];
+  }
 
   // ── Abstract members subclasses must implement ────────────────────
 

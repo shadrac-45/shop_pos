@@ -1,4 +1,4 @@
-﻿import 'package:isar/isar.dart';
+import 'package:isar/isar.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 
 part 'batch.g.dart';
@@ -14,6 +14,16 @@ class Batch {
   late DateTime expiryDate;
   late DateTime restockDate;
   String? supplierNote;
+
+  /// Purchase cost per unit for this delivery, if known.
+  double? unitCost;
+
+  /// Stable ID used for sync and backups.
+  @Index()
+  String? uuid;
+
+  DateTime? updatedAt;
+  bool isSynced = false;
 
   // Link back to product
   final IsarLink<Product> product = IsarLink<Product>();

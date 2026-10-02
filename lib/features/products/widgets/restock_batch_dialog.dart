@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Restock Batch Dialog — ShopPOS
 /// ============================================
 library;
@@ -6,15 +6,19 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:isar/isar.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/features/products/models/product.dart';
-import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/products/services/inventory_service.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
+import 'package:shop_pos/core/utils/hash_helpers.dart';
 
 class RestockBatchDialog extends ConsumerStatefulWidget {
   final Product product;
@@ -30,6 +34,7 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
   final _formKey = GlobalKey<FormState>();
   final _qtyController = TextEditingController();
   final _noteController = TextEditingController();
+  final _costController = TextEditingController();
 
   DateTime _selectedExpiry = DateTime.now().add(const Duration(days: 90));
   bool _isLoading = false;
@@ -38,6 +43,7 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
   void dispose() {
     _qtyController.dispose();
     _noteController.dispose();
+    _costController.dispose();
     super.dispose();
   }
 
@@ -68,24 +74,16 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
     setState(() => _isLoading = true);
 
     try {
-      final isar = ref.read(isarProvider);
-      final quantity = int.parse(_qtyController.text.trim());
-
-      await isar.writeTxn(() async {
-        final newBatch = Batch()
-          ..productId = widget.product.id
-          ..quantity = quantity
-          ..expiryDate = _selectedExpiry
-          ..restockDate = DateTime.now()
-          ..supplierNote = _noteController.text.trim().isEmpty
-              ? null
-              : _noteController.text.trim();
-
-        // Fixed: Use the correct Isar-generated collection accessor
-        await isar.batchs.put(newBatch);
-        newBatch.product.value = widget.product;
-        await newBatch.product.save();
-      });
+      final cost = _costController.text.trim();
+      await InventoryService.restock(
+        ref.read(isarProvider),
+        ref.read(currentUserProvider),
+        product: widget.product,
+        quantity: int.parse(_qtyController.text.trim()),
+        expiryDate: _selectedExpiry,
+        supplierNote: _noteController.text,
+        unitCost: cost.isEmpty ? null : double.tryParse(cost),
+      );
 
       if (!mounted) return;
 
@@ -94,7 +92,7 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
       context.showSuccessSnackbar('${widget.product.name} restocked successfully!');
     } catch (e) {
       if (!mounted) return;
-      context.showErrorSnackbar('Error: $e');
+      context.showErrorSnackbar(errorMessage(e));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -138,7 +136,7 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
                   autofocus: true,
                   obscureText: true,
                   keyboardType: TextInputType.number,
-                  maxLength: AppConstants.pinLength,
+                  maxLength: AppConstants.maxPinLength,
                   style: const TextStyle(fontSize: 18, letterSpacing: 4),
                   decoration: InputDecoration(
                     errorText: errorMsg,
@@ -159,20 +157,39 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
                     ? null
                     : () async {
                         final pin = pinController.text.trim();
-                        if (pin.length != AppConstants.pinLength) {
-                          setDialogState(() => errorMsg = '4-digit PIN required');
+                        if (pin.length < AppConstants.minPinLength ||
+                            pin.length > AppConstants.maxPinLength) {
+                          setDialogState(() => errorMsg = 'Enter the 4–6 digit Owner PIN');
                           return;
                         }
 
                         setDialogState(() => isVerifying = true);
 
-                        final currentUser = ref.read(currentUserProvider);
-                        final isValid = pin == currentUser?.pinHash || 
-                                       pin == AppConstants.defaultOwnerPin;
+                        // Check against every active owner account's stored
+                        // hash. A still-default owner PIN doesn't count: it is
+                        // publicly known, so it proves nothing.
+                        final owners = await ref
+                            .read(isarProvider)
+                            .appUsers
+                            .filter()
+                            .roleEqualTo(AppConstants.roleOwner)
+                            .isActiveEqualTo(true)
+                            .findAll();
+                        final isValid = owners.any((o) =>
+                            !HashHelpers.isDefaultPinHash(o.pinHash) &&
+                            HashHelpers.verifyPin(pin, o.pinHash));
 
                         if (!ctx.mounted) return;
 
-                        Navigator.of(ctx).pop(isValid);
+                        if (!isValid) {
+                          setDialogState(() {
+                            isVerifying = false;
+                            errorMsg = 'Incorrect Owner PIN';
+                          });
+                          return;
+                        }
+
+                        Navigator.of(ctx).pop(true);
                       },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.danger,
@@ -275,6 +292,14 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
                     ],
                   ),
                 ),
+              ),
+
+              const SizedBox(height: 14),
+
+              MoneyField(
+                controller: _costController,
+                label: 'Cost per unit (optional)',
+                hint: widget.product.costPrice?.toStringAsFixed(2),
               ),
 
               const SizedBox(height: 14),

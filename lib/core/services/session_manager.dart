@@ -9,7 +9,6 @@ library;
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 
@@ -51,9 +50,11 @@ class SessionManager {
     );
   }
 
-  /// Record user activity (login, button press, data entry).
-  /// Resets the inactivity timer on each activity.
+  /// Record user activity. Called for every pointer-down anywhere in the
+  /// app (see ShopPOSApp), so any interaction keeps the session alive.
   void recordActivity() {
+    // Taps on the login screens must not start a timer for nobody.
+    if (_sessionStartTime == null) return;
     _lastActivityTime = DateTime.now();
     _resetInactivityTimer();
   }
@@ -102,17 +103,9 @@ class SessionManager {
   Future<void> _handleSessionTimeout() async {
     debugPrint('[SessionManager] Logging out due to inactivity');
     
-    // Trigger logout in auth provider
-    ref.read(currentUserProvider.notifier).logout();
-    
-    // Store session timeout event for logging
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final now = DateTime.now().toIso8601String();
-      await prefs.setString('_last_session_timeout', now);
-    } catch (e) {
-      debugPrint('[SessionManager] Failed to log timeout: $e');
-    }
+    // Logs the timeout to the activity log; ShopPOSApp then returns to
+    // the role picker.
+    ref.read(currentUserProvider.notifier).logout(timedOut: true);
   }
 
   /// Clean up resources.

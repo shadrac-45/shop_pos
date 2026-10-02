@@ -1,4 +1,4 @@
-﻿import 'package:isar/isar.dart';
+import 'package:isar/isar.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 
 part 'product.g.dart';
@@ -30,6 +30,21 @@ class Product {
   // only populated from spreadsheets that supply a cost column.
   double? costPrice;
 
+  /// Stable ID used for sync and backups.
+  @Index()
+  String? uuid;
+
+  /// Stock at or below this level counts as low stock (0 = no alert).
+  int reorderLevel = 0;
+
+  /// Archived products are hidden from the till and catalog but kept so
+  /// past sales still resolve.
+  @Index()
+  bool isArchived = false;
+
+  DateTime? updatedAt;
+  bool isSynced = false;
+
   @Backlink(to: 'product')
   final IsarLinks<Batch> batches = IsarLinks<Batch>();
 
@@ -58,4 +73,13 @@ class Product {
 
   @ignore
   bool get isExpired => daysUntilExpiry <= 0;
+
+  /// Units that are not past their expiry date, i.e. sellable.
+  @ignore
+  int get sellableStock => batches
+      .where((b) => b.quantity > 0 && !b.isExpired)
+      .fold(0, (sum, b) => sum + b.quantity);
+
+  @ignore
+  bool get isLowStock => reorderLevel > 0 && totalStock <= reorderLevel;
 }

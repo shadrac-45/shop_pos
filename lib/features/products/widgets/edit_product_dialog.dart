@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Edit Product Dialog — ShopPOS
 /// ============================================
 /// Dialog for owners to edit an existing product.
@@ -18,6 +18,10 @@ import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/products/services/inventory_service.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
 import 'package:shop_pos/features/products/widgets/base_product_dialog.dart';
 
@@ -53,6 +57,7 @@ class _EditProductDialogState
     final matchingIndex = AppConstants.quickButtonPalette
         .indexWhere((c) => c.toARGB32() == product.quickButtonColor);
     _selectedColorIndex = matchingIndex >= 0 ? matchingIndex : 0;
+    loadInventoryFields(product);
   }
 
   @override
@@ -109,7 +114,7 @@ class _EditProductDialogState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                buildLabel('Price (GH₵) *'),
+                buildLabel('Price (${CurrencyHelpers.symbol}) *'),
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _priceController,
@@ -155,6 +160,8 @@ class _EditProductDialogState
         onSelect: (index) => setState(() => _selectedColorIndex = index),
       ),
 
+      const SizedBox(height: 14),
+      ...buildInventoryFields(),
       const SizedBox(height: 10),
     ];
   }
@@ -167,21 +174,23 @@ class _EditProductDialogState
 
     setState(() => isLoading = true);
 
-    final isar = ref.read(isarProvider);
-
     try {
-      await isar.writeTxn(() async {
-        widget.product.name = _nameController.text.trim();
-        widget.product.price =
-            double.parse(_priceController.text.trim());
-        widget.product.category = _categoryController.text.trim().isEmpty
-            ? 'General'
-            : _categoryController.text.trim();
-        widget.product.quickButtonColor =
-            AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32();
-
-        await isar.products.put(widget.product);
-      });
+      await InventoryService.updateProduct(
+        ref.read(isarProvider),
+        ref.read(currentUserProvider),
+        widget.product,
+        ProductInput(
+          name: _nameController.text,
+          price: double.parse(_priceController.text.trim()),
+          category: _categoryController.text,
+          quickButtonColor:
+              AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32(),
+          costPrice: costValue,
+          barcode: barcodeController.text,
+          sku: skuController.text,
+          reorderLevel: reorderValue,
+        ),
+      );
 
       if (!mounted) return;
 
@@ -194,7 +203,7 @@ class _EditProductDialogState
     } catch (e) {
       if (!mounted) return;
       setState(() => isLoading = false);
-      context.showErrorSnackbar('Error: $e');
+      context.showErrorSnackbar(errorMessage(e));
     }
   }
 }

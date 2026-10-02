@@ -43,10 +43,12 @@ class NotificationService {
     _initialized = true;
   }
 
-  /// Show a simple expiry alert notification
+  /// Show a stock alert (expiring and/or low-stock products).
+  /// [title] defaults to "N Products Expiring Soon".
   Future<void> showExpiryAlert({
     required int expiringCount,
     required String body,
+    String? title,
   }) async {
     if (!_initialized) await init();
 
@@ -54,7 +56,7 @@ class NotificationService {
         AndroidNotificationDetails(
       'expiry_alerts_channel',
       'Expiry Alerts',
-      channelDescription: 'Notifications for products expiring soon',
+      channelDescription: 'Products expiring soon or running low on stock',
       importance: Importance.max,
       priority: Priority.high,
       ticker: 'ticker',
@@ -66,7 +68,7 @@ class NotificationService {
 
     await _flutterLocalNotificationsPlugin.show(
       0, // Notification ID
-      '$expiringCount Products Expiring Soon',
+      title ?? '$expiringCount Products Need Attention',
       body,
       platformChannelSpecifics,
       payload: 'expiry_alert',

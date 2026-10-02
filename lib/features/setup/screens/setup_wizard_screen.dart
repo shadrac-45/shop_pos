@@ -22,13 +22,14 @@ library;
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/main/screens/main_shell_screen.dart';
 import 'package:shop_pos/features/setup/providers/setup_wizard_provider.dart';
 
-/// Display labels for the staff roles understood by [WizardStaffEntry].
-const _staffRoles = ['cashier', 'manager', 'stock_clerk'];
+/// Staff roles understood by [WizardStaffEntry].
+const _staffRoles = AppConstants.staffRoles;
 
 class SetupWizardScreen extends ConsumerStatefulWidget {
   const SetupWizardScreen({super.key});
@@ -50,6 +51,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final _vatRateCtrl = TextEditingController();
   final _taxIdCtrl = TextEditingController();
   final _csvCtrl = TextEditingController();
+  final _ownerPinCtrl = TextEditingController();
 
   static const _stepTitles = [
     'Store Profile',
@@ -82,6 +84,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     _vatRateCtrl.dispose();
     _taxIdCtrl.dispose();
     _csvCtrl.dispose();
+    _ownerPinCtrl.dispose();
     super.dispose();
   }
 
@@ -105,22 +108,51 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         ));
   }
 
+  void _flushStaff() {
+    ref.read(setupWizardProvider.notifier).update(
+        (s) => s.copyWith(ownerPin: _ownerPinCtrl.text.trim()));
+  }
+
   void _next() {
     if (_step == 0) _flushStoreProfile();
     if (_step == 1) _flushTaxCurrency();
+    if (_step == 3) {
+      _flushStaff();
+      final problem = ref.read(setupWizardProvider.notifier).validateStaff();
+      if (problem != null) {
+        setState(() => _error = problem);
+        return;
+      }
+    }
     if (_step < _stepTitles.length - 1) {
-      setState(() => _step++);
-      _error = null;
+      setState(() {
+        _step++;
+        _error = null;
+      });
     }
   }
 
   void _back() {
-    if (_step > 0) setState(() => _step--);
+    if (_step > 0) {
+      setState(() {
+        _step--;
+        _error = null;
+      });
+    }
   }
 
   Future<void> _finish() async {
     _flushStoreProfile();
     _flushTaxCurrency();
+    _flushStaff();
+    final problem = ref.read(setupWizardProvider.notifier).validateStaff();
+    if (problem != null) {
+      setState(() {
+        _step = 3;
+        _error = problem;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -137,7 +169,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       if (mounted) {
         setState(() {
           _loading = false;
-          _error = 'Failed to save setup. Please try again.';
+          _error = e is StateError
+              ? e.message
+              : 'Failed to save setup. Please try again.';
         });
       }
     }
@@ -212,7 +246,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label('Staff members (${staff.length})'),
+        _label('Your owner PIN',
+            hint: 'Used on the PIN keypad and to approve overrides. '
+                '4–6 digits; 1234 and 0000 are not allowed.'),
+        _buildTextField(_ownerPinCtrl, 'Owner PIN',
+            keyboardType: TextInputType.number,
+            obscure: true,
+            maxLength: AppConstants.maxPinLength),
+        const SizedBox(height: AppSpacing.md),
+        _label('Staff members (${staff.length})',
+            hint: 'Leave a row blank to skip it. Every PIN must be different.'),
         const SizedBox(height: AppSpacing.sm),
         if (staff.isEmpty)
           const Text('No staff added yet.',
@@ -229,6 +272,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Widget _buildStaffRow(int index, WizardStaffEntry entry) {
+    // Typing writes straight into the entry (shared with the provider
+    // state) without a rebuild, so the cursor isn't reset on each key.
     final nameCtrl = TextEditingController(text: entry.name);
     final pinCtrl = TextEditingController(text: entry.pin);
     return Padding(
@@ -236,7 +281,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(flex: 3, child: _buildTextField(nameCtrl, 'Name')),
+          Expanded(
+              flex: 3,
+              child: _buildTextField(nameCtrl, 'Name',
+                  onChanged: (v) => entry.name = v)),
           const SizedBox(width: AppSpacing.md),
           Expanded(
             child: _roleDropdown(entry.role, (role) {
@@ -250,7 +298,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           ),
           const SizedBox(width: AppSpacing.md),
           Expanded(
-              child: _buildTextField(pinCtrl, 'PIN (4 digits)', maxLength: 4)),
+              child: _buildTextField(pinCtrl, 'PIN (4–6)',
+                  keyboardType: TextInputType.number,
+                  maxLength: AppConstants.maxPinLength,
+                  onChanged: (v) => entry.pin = v)),
           const SizedBox(width: AppSpacing.md),
           IconButton(
             tooltip: 'Remove',
@@ -273,12 +324,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   // flushed on the next Next/Finish, but we update incrementally for the
   // role change above; name/pin are written here to keep the state current.
   Widget _roleDropdown(String value, ValueChanged<String?> onChanged) {
-    String display(String r) => switch (r) {
-          'cashier' => 'Cashier',
-          'manager' => 'Manager',
-          'stock_clerk' => 'Stock Clerk',
-          _ => 'Cashier',
-        };
+    String display(String r) => AppConstants.roleLabel(r);
     return InputDecorator(
       decoration: const InputDecoration(
         contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -450,9 +496,11 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     TextInputType? keyboardType,
     bool obscure = false,
     int? maxLength,
+    ValueChanged<String>? onChanged,
   }) {
     return TextField(
       controller: ctrl,
+      onChanged: onChanged,
       obscureText: obscure,
       keyboardType: keyboardType,
       maxLength: maxLength,

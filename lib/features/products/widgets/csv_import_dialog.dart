@@ -18,7 +18,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
@@ -45,8 +45,9 @@ class _CsvImportDialogState extends ConsumerState<CsvImportDialog>
   late final TabController _tabController;
   final TextEditingController _textController = TextEditingController();
 
+  /// Owners and managers may import (Permission.manageProducts).
   bool get _isOwner =>
-      ref.watch(currentUserProvider)?.role == AppConstants.roleOwner;
+      Permissions.can(ref.watch(currentUserProvider), Permission.manageProducts);
 
   ImportProductsController get _controller =>
       ref.read(importProductsProvider.notifier);

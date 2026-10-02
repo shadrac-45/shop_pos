@@ -4,15 +4,26 @@
 /// Touch-first product management interface:
 ///   • Structured product card list with stock & expiry indicators
 ///   • Expandable batch details with restock & edit actions
+///   • Filters: all / low stock / expiring / archived
+///   • Stock adjustments, history, expired write-offs, archiving
+///   • Actions shown according to the user's role
 ///   • Skeleton loader placeholder & rich empty states
 /// ============================================
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/auth/permissions.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/features/products/models/batch.dart';
+import 'package:shop_pos/features/products/screens/stock_history_screen.dart';
+import 'package:shop_pos/features/products/services/inventory_service.dart';
+import 'package:shop_pos/features/products/widgets/stock_adjust_dialog.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
@@ -39,8 +50,87 @@ class OwnerProductsScreen extends ConsumerStatefulWidget {
   ConsumerState<OwnerProductsScreen> createState() => _OwnerProductsScreenState();
 }
 
+enum _ProductFilter { all, lowStock, expiring, archived }
+
 class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   int _expandedProductId = -1;
+  _ProductFilter _filter = _ProductFilter.all;
+
+  static bool _isExpiring(Product p) => p.batches.any(
+      (b) => b.quantity > 0 && b.daysUntilExpiry <= AppConstants.expiryUrgentDays);
+
+  bool _matchesFilter(Product p, _ProductFilter f) => switch (f) {
+        _ProductFilter.all => !p.isArchived,
+        _ProductFilter.lowStock => !p.isArchived && p.isLowStock,
+        _ProductFilter.expiring => !p.isArchived && _isExpiring(p),
+        _ProductFilter.archived => p.isArchived,
+      };
+
+  void _refreshProduct(Product product) {
+    ref.invalidate(productServiceProvider);
+    ref.invalidate(productBatchesProvider(product.id));
+  }
+
+  void _showAdjust(Product product) {
+    showDialog<bool>(
+      context: context,
+      builder: (_) => StockAdjustDialog(product: product),
+    ).then((_) => _refreshProduct(product));
+  }
+
+  void _showHistory(Product product) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => StockHistoryScreen(product: product),
+    ));
+  }
+
+  Future<void> _toggleArchive(Product product) async {
+    final archiving = !product.isArchived;
+    final ok = await confirmDialog(
+      context,
+      title: archiving ? 'Archive ${product.name}?' : 'Restore ${product.name}?',
+      message: archiving
+          ? 'It will be hidden from the till and catalog. Past sales are kept, '
+              'and you can restore it from the Archived filter.'
+          : 'It will appear on the till again.',
+      confirmLabel: archiving ? 'Archive' : 'Restore',
+      destructive: archiving,
+    );
+    if (!ok) return;
+    try {
+      await InventoryService.setArchived(
+          ref.read(isarProvider), ref.read(currentUserProvider), product, archiving);
+      if (!mounted) return;
+      setState(() => _expandedProductId = -1);
+      context.showSuccessSnackbar(
+          archiving ? '${product.name} archived.' : '${product.name} restored.');
+      _refreshProduct(product);
+    } catch (e) {
+      if (mounted) context.showErrorSnackbar(errorMessage(e));
+    }
+  }
+
+  Future<void> _writeOff(Product product, Batch batch) async {
+    final ok = await confirmDialog(
+      context,
+      title: 'Write off ${batch.quantity} × ${product.name}?',
+      message: 'This batch expired on ${DateHelpers.formatShort(batch.expiryDate)}. '
+          'Its remaining stock will be removed and recorded as an expired write-off.',
+      confirmLabel: 'Write Off',
+      destructive: true,
+    );
+    if (!ok) return;
+    try {
+      await InventoryService.writeOffBatch(
+          ref.read(isarProvider), ref.read(currentUserProvider),
+          product: product, batch: batch);
+      if (!mounted) return;
+      context.showSuccessSnackbar('Expired stock written off.');
+      _refreshProduct(product);
+    } catch (e) {
+      if (mounted) context.showErrorSnackbar(errorMessage(e));
+    }
+  }
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
@@ -101,26 +191,44 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   Widget build(BuildContext context) {
     final currentUser = ref.watch(currentUserProvider);
     final productsAsync = ref.watch(productServiceProvider);
+    final canManage = Permissions.can(currentUser, Permission.manageProducts);
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(currentUser?.name ?? 'Owner'),
+            _buildHeader(currentUser?.name ?? 'Owner', canManage),
             _buildSearchBar(),
+            _buildFilterChips(productsAsync.valueOrNull ?? const []),
             Expanded(
               child: productsAsync.when(
-                data: (products) {
+                data: (all) {
+                  final products = all.where((p) => _matchesFilter(p, _filter));
                   final filtered = _searchQuery.isEmpty
-                      ? products
+                      ? products.toList()
                       : products
                           .where((p) =>
                               p.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
                               p.category.toLowerCase().contains(_searchQuery.toLowerCase()))
                           .toList();
 
-                  return _buildProductList(filtered);
+                  if (filtered.isEmpty && _filter != _ProductFilter.all && _searchQuery.isEmpty) {
+                    return AppEmptyState(
+                      icon: Icons.filter_alt_off_rounded,
+                      title: 'Nothing here',
+                      description: switch (_filter) {
+                        _ProductFilter.lowStock =>
+                          'No product is at or below its low-stock level. Set a level in Edit Product.',
+                        _ProductFilter.expiring =>
+                          'No stock expires within ${AppConstants.expiryUrgentDays} days.',
+                        _ => 'No archived products.',
+                      },
+                      actionLabel: 'Show all',
+                      onAction: () => setState(() => _filter = _ProductFilter.all),
+                    );
+                  }
+                  return _buildProductList(filtered, canManage);
                 },
                 loading: () => ListView.separated(
                   padding: const EdgeInsets.all(AppSpacing.md),
@@ -138,18 +246,60 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddProduct,
-        icon: const Icon(Icons.add_rounded, size: 24),
-        label: const Text(
-          'Add Product',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+      floatingActionButton: !canManage
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _showAddProduct,
+              icon: const Icon(Icons.add_rounded, size: 24),
+              label: const Text(
+                'Add Product',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildFilterChips(List<Product> products) {
+    int count(_ProductFilter f) => products.where((p) => _matchesFilter(p, f)).length;
+    Widget chip(_ProductFilter f, String label, {Color? color}) {
+      final n = count(f);
+      final selected = _filter == f;
+      return Padding(
+        padding: const EdgeInsets.only(right: AppSpacing.sm),
+        child: ChoiceChip(
+          label: Text(f == _ProductFilter.all ? label : '$label ($n)'),
+          selected: selected,
+          onSelected: (_) => setState(() {
+            _filter = f;
+            _expandedProductId = -1;
+          }),
+          selectedColor: color ?? AppColors.primary,
+          labelStyle: TextStyle(
+            color: selected
+                ? Colors.white
+                : (n > 0 && color != null ? color : AppColors.textPrimary),
+            fontWeight: FontWeight.w600,
+          ),
+          showCheckmark: false,
         ),
+      );
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, 0),
+      child: Row(
+        children: [
+          chip(_ProductFilter.all, 'All'),
+          chip(_ProductFilter.lowStock, 'Low stock', color: AppColors.warning),
+          chip(_ProductFilter.expiring, 'Expiring', color: AppColors.danger),
+          chip(_ProductFilter.archived, 'Archived', color: AppColors.textSecondary),
+        ],
       ),
     );
   }
 
-  Widget _buildHeader(String ownerName) {
+  Widget _buildHeader(String ownerName, bool canManage) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
       decoration: const BoxDecoration(
@@ -197,7 +347,9 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                 ),
               ),
               const SizedBox(width: AppSpacing.sm),
-              if (compact)
+              if (!canManage)
+                const SizedBox.shrink()
+              else if (compact)
                 IconButton(
                   onPressed: _showImportCsvDialog,
                   tooltip: 'Import CSV / Excel',
@@ -251,7 +403,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
     );
   }
 
-  Widget _buildProductList(List<Product> products) {
+  Widget _buildProductList(List<Product> products, bool canManage) {
     if (products.isEmpty) {
       if (_searchQuery.isNotEmpty) {
         return AppEmptyState(
@@ -295,12 +447,15 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.xs),
-              const Text(
-                'Populate your catalog instantly with 8 retail products, import from CSV or Excel, or create items manually.',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+              Text(
+                canManage
+                    ? 'Add products one by one, or import your catalog from a CSV or Excel file.'
+                    : 'Ask the owner or a manager to add products.',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.xl),
+              if (canManage) ...[
               ElevatedButton.icon(
                 onPressed: _showAddProduct,
                 icon: const Icon(Icons.add_rounded, size: 20),
@@ -331,16 +486,21 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: AppSpacing.sm),
-              TextButton.icon(
-                onPressed: _loadSampleProducts,
-                icon: const Icon(Icons.auto_awesome_rounded, size: 18),
-                label: const Text('Load Sample Demo Products (8 Items)'),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary,
-                  minimumSize: const Size(270, 44),
+              ],
+              // Demo data is for development only: it must never land in
+              // a real shop's stock or reports.
+              if (kDebugMode && canManage) ...[
+                const SizedBox(height: AppSpacing.sm),
+                TextButton.icon(
+                  onPressed: _loadSampleProducts,
+                  icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                  label: const Text('Load Sample Products (debug only)'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.textSecondary,
+                    minimumSize: const Size(270, 44),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -461,19 +621,28 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                           const SizedBox(width: AppSpacing.md),
                           Flexible(
                             child: Text(
-                              'Stock: ${product.totalStock}',
-                              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                              'Stock: ${product.totalStock.toInt()}'
+                              '${product.isLowStock ? ' · LOW' : ''}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: product.isLowStock
+                                    ? AppColors.warning
+                                    : AppColors.textSecondary,
+                                fontWeight: product.isLowStock
+                                    ? FontWeight.w700
+                                    : FontWeight.normal,
+                              ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
-                      if (product.daysUntilExpiry != 0 && product.daysUntilExpiry <= 0)
+                      if (product.batches.any((b) => b.quantity > 0 && b.isExpired))
                         const Padding(
                           padding: EdgeInsets.only(top: 2),
                           child: Text(
-                            'EXPIRED – Remove!',
+                            'Has expired stock – write it off',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
@@ -521,6 +690,51 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
     );
   }
 
+  /// Buttons for what the signed-in user's role may do with [product].
+  Widget _buildActions(Product product) {
+    final user = ref.watch(currentUserProvider);
+    Widget action(String label, IconData icon, VoidCallback onPressed, {Color? color}) {
+      final c = color ?? AppColors.textSecondary;
+      return OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: c,
+          side: BorderSide(color: color == null ? AppColors.border : c),
+          minimumSize: const Size(0, AppTouch.minTargetSize),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
+      children: [
+        if (!product.isArchived && Permissions.can(user, Permission.restock))
+          action('Restock', Icons.add_box_rounded, () => _showRestockBatch(product),
+              color: AppColors.primary),
+        if (Permissions.can(user, Permission.adjustStock))
+          action('Adjust Stock', Icons.tune_rounded, () => _showAdjust(product)),
+        if (Permissions.can(user, Permission.manageProducts))
+          action('Edit', Icons.edit_rounded, () {
+            showDialog(
+              context: context,
+              builder: (_) => EditProductDialog(product: product),
+            ).then((_) => ref.invalidate(productServiceProvider));
+          }),
+        action('History', Icons.history_rounded, () => _showHistory(product)),
+        if (Permissions.can(user, Permission.manageProducts))
+          action(
+            product.isArchived ? 'Restore' : 'Archive',
+            product.isArchived ? Icons.unarchive_rounded : Icons.archive_rounded,
+            () => _toggleArchive(product),
+            color: product.isArchived ? AppColors.primary : AppColors.danger,
+          ),
+      ],
+    );
+  }
+
   Widget _buildBatchDetails(Product product) {
     final batchesAsync = ref.watch(productBatchesProvider(product.id));
 
@@ -565,9 +779,29 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                               ),
                           ],
                         ),
-                        Text(
-                          'Expires: ${DateHelpers.formatShort(batch.expiryDate)}',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${batch.isExpired ? 'Expired' : 'Expires'}: '
+                              '${DateHelpers.formatShort(batch.expiryDate)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: batch.isExpired
+                                    ? AppColors.danger
+                                    : AppColors.textSecondary,
+                              ),
+                            ),
+                            if (batch.isExpired &&
+                                batch.quantity > 0 &&
+                                Permissions.can(ref.read(currentUserProvider),
+                                    Permission.adjustStock))
+                              TextButton(
+                                onPressed: () => _writeOff(product, batch),
+                                child: const Text('Write off',
+                                    style: TextStyle(color: AppColors.danger)),
+                              ),
+                          ],
                         ),
                       ],
                     ),
@@ -590,40 +824,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _showRestockBatch(product),
-                    icon: const Icon(Icons.add_box_rounded, size: 18),
-                    label: const Text('Restock Batch'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
-                      minimumSize: const Size(double.infinity, AppTouch.buttonHeight),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (_) => EditProductDialog(product: product),
-                      ).then((_) => ref.invalidate(productServiceProvider));
-                    },
-                    icon: const Icon(Icons.edit_rounded, size: 18),
-                    label: const Text('Edit Product'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.textSecondary,
-                      side: const BorderSide(color: AppColors.border),
-                      minimumSize: const Size(double.infinity, AppTouch.buttonHeight),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            child: _buildActions(product),
           ),
         ],
       ),

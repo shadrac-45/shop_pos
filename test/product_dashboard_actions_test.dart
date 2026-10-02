@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:isar/isar.dart';
+import 'package:shop_pos/core/database/schemas.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/products/services/csv_import_service.dart';
@@ -21,7 +22,7 @@ void main() {
 
     tempDir = await Directory.systemTemp.createTemp('pos_product_test_');
     isar = await Isar.open(
-      [ProductSchema, BatchSchema],
+      allSchemas,
       directory: tempDir.path,
     );
   });

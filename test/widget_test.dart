@@ -44,6 +44,13 @@ void main() {
       expect(HashHelpers.verifyPin('9999', hashedOwner), isFalse);
       expect(HashHelpers.verifyPin('1234', '1234'), isFalse); // Raw plaintext string is rejected
     });
+
+    test('isDefaultPinHash flags only the seeded default PINs', () {
+      expect(HashHelpers.isDefaultPinHash(HashHelpers.hashPin('1234')), isTrue);
+      expect(HashHelpers.isDefaultPinHash(HashHelpers.hashPin('0000')), isTrue);
+      expect(HashHelpers.isDefaultPinHash(HashHelpers.hashPin('482916')), isFalse);
+      expect(HashHelpers.isDefaultPinHash('1234'), isFalse); // plaintext is not a hash
+    });
   });
 
   group('CurrencyHelpers Tests', () {

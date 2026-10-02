@@ -1,12 +1,9 @@
 /// ============================================
 /// Settings Screen — ShopPOS
 /// ============================================
-/// Clean, end-user facing screen for Cashiers and Owners.
-/// Displays cashier profile, PIN management ("Change PIN"),
-/// store preferences, app version, and cashier logout.
-///
-/// OWNER-ONLY: "Manage Staff" section for creating / managing
-/// cashier accounts is only shown when role == "owner".
+/// Hub for account, till, management and store
+/// settings. Each section appears only for roles
+/// allowed to use it (see Permissions).
 ///
 /// GATING: Developer/Debug configuration is hidden from normal view.
 /// In DEBUG builds: tapping the "ShopPOS Version" tile 5 times triggers
@@ -19,17 +16,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
+import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/activity/screens/activity_log_screen.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
-import 'package:shop_pos/features/auth/screens/login_screen.dart';
-import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
-import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
-import 'package:shop_pos/features/settings/screens/developer_debug_screen.dart';
-import 'package:shop_pos/features/settings/screens/manage_staff_screen.dart';
+import 'package:shop_pos/features/auth/services/admin_auth_service.dart';
+import 'package:shop_pos/features/expenses/screens/expenses_screen.dart';
 import 'package:shop_pos/features/products/widgets/csv_import_dialog.dart';
+import 'package:shop_pos/features/settings/screens/backup_screen.dart';
+import 'package:shop_pos/features/settings/screens/developer_debug_screen.dart';
+import 'package:shop_pos/features/settings/screens/integrations_screen.dart';
+import 'package:shop_pos/features/settings/screens/manage_staff_screen.dart';
+import 'package:shop_pos/features/settings/screens/pending_momo_screen.dart';
+import 'package:shop_pos/features/settings/screens/store_settings_screen.dart';
+import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
+import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
+import 'package:shop_pos/features/shifts/screens/shift_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -61,12 +69,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _devTapCount = 0;
       HapticFeedback.mediumImpact();
       context.showSuccessSnackbar('Developer Mode Unlocked!');
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const DeveloperDebugScreen()),
-      );
+      _open(const DeveloperDebugScreen());
     }
   }
+
+  void _open(Widget screen) =>
+      Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
   Future<void> _openChangePinDialog() async {
     final user = ref.read(currentUserProvider);
@@ -83,6 +91,79 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _openChangePasswordDialog() async {
+    final user = ref.read(currentUserProvider);
+    if (user == null) return;
+    final current = TextEditingController();
+    final next = TextEditingController();
+    final confirm = TextEditingController();
+    String? error;
+
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Change Admin Password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                  controller: current,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Current password')),
+              TextField(
+                  controller: next,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                      labelText:
+                          'New password (${AdminAuthService.minPasswordLength}+ characters)')),
+              TextField(
+                  controller: confirm,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Confirm new password')),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: AppSpacing.sm),
+                  child: Text(error!, style: const TextStyle(color: AppColors.danger)),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                if (next.text != confirm.text) {
+                  setDialogState(() => error = 'The new passwords do not match.');
+                  return;
+                }
+                try {
+                  final ok = await AdminAuthService.changePassword(
+                    ref.read(isarProvider),
+                    user,
+                    currentPassword: current.text,
+                    newPassword: next.text,
+                  );
+                  if (!ok) {
+                    setDialogState(() => error = 'Current password is incorrect.');
+                    return;
+                  }
+                  if (ctx.mounted) Navigator.pop(ctx, true);
+                } catch (e) {
+                  setDialogState(() => error = errorMessage(e));
+                }
+              },
+              child: const Text('Change'),
+            ),
+          ],
+        ),
+      ),
+    );
+    current.dispose();
+    next.dispose();
+    confirm.dispose();
+    if (changed == true && mounted) context.showSuccessSnackbar('Password changed.');
+  }
+
   void _openCsvImportDialog() {
     showModalBottomSheet<int>(
       context: context,
@@ -92,10 +173,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  Widget _tile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    Color color = AppColors.primary,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: TouchableCard(
+        onTap: onTap,
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(icon, color: color),
+          title: Text(title),
+          subtitle: Text(subtitle,
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+          trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProvider);
-    final isOwner = user?.role == 'owner';
+    final store = ref.watch(storeSettingsProvider);
+    bool can(Permission p) => Permissions.can(user, p);
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
@@ -112,22 +217,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               padding: const EdgeInsets.all(AppSpacing.lg),
               child: Row(
                 children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        (user?.name ?? 'U')[0].toUpperCase(),
-                        style: const TextStyle(
-                          color: AppColors.primary,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+                    child: Text(
+                      (user?.name.isNotEmpty ?? false) ? user!.name[0].toUpperCase() : 'U',
+                      style: const TextStyle(
+                          color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.w800),
                     ),
                   ),
                   const SizedBox(width: AppSpacing.lg),
@@ -135,26 +231,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          user?.name ?? 'Store Cashier',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
+                        Text(user?.name ?? 'Staff', style: Theme.of(context).textTheme.titleLarge),
                         const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.15),
-                            borderRadius: AppSpacing.borderSm,
-                          ),
-                          child: Text(
-                            (user?.role ?? 'cashier').toUpperCase(),
-                            style: const TextStyle(
-                              color: AppColors.primary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
+                        StatusPill(
+                          AppConstants.roleLabel(user?.role ?? AppConstants.roleCashier),
+                          color: AppColors.primary,
                         ),
                       ],
                     ),
@@ -163,167 +244,126 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
 
-            // ── Security & Account Section (For ALL staff) ────
-            const SizedBox(height: AppSpacing.xl),
-            const Text(
-              'SECURITY & ACCOUNT',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textSecondary,
-                letterSpacing: 1,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TouchableCard(
+            // ── Account ───────────────────────────────────────
+            const SectionLabel('Security & account'),
+            _tile(
+              icon: Icons.pin_rounded,
+              title: 'Change My PIN',
+              subtitle: 'Set a personal 4–6 digit PIN',
               onTap: _openChangePinDialog,
-              child: const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.pin_rounded, color: AppColors.primary),
-                title: Text('Change My PIN'),
-                subtitle: Text(
-                  'Replace assigned PIN with a personal 4-digit PIN',
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                ),
-                trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
-              ),
             ),
-
-            // ── Owner-only: Manage Staff ──────────────────────
-            if (isOwner) ...[
-              const SizedBox(height: AppSpacing.xl),
-              const Text(
-                'STAFF MANAGEMENT',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textSecondary,
-                  letterSpacing: 1,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              TouchableCard(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ManageStaffScreen()),
-                ),
-                child: const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.manage_accounts_rounded, color: AppColors.primary),
-                  title: Text('Manage Staff'),
-                  subtitle: Text(
-                    'Create, deactivate & manage cashier accounts',
-                    style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                  ),
-                  trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
-                ),
+            if (user?.passwordHash != null)
+              _tile(
+                icon: Icons.password_rounded,
+                title: 'Change Admin Password',
+                subtitle: 'Used to sign in with email',
+                onTap: _openChangePasswordDialog,
               ),
 
-              const SizedBox(height: AppSpacing.xl),
-              const Text(
-                'INVENTORY & DATA',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textSecondary,
-                  letterSpacing: 1,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              TouchableCard(
-                onTap: _openCsvImportDialog,
-                child: const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.file_upload_outlined, color: AppColors.primary),
-                  title: Text('Import Products (CSV)'),
-                  subtitle: Text(
-                    'Bulk import catalog & stock quantities from CSV or text',
-                    style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                  ),
-                  trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
-                ),
+            // ── Till ──────────────────────────────────────────
+            if (can(Permission.runShift)) ...[
+              const SectionLabel('Till'),
+              _tile(
+                icon: Icons.lock_clock_rounded,
+                title: 'Shift & Cash-up',
+                subtitle: 'Open with a float, close with a cash count',
+                onTap: () => _open(const ShiftScreen()),
               ),
             ],
 
-            const SizedBox(height: AppSpacing.xl),
-            const Text(
-              'STORE PREFERENCES',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textSecondary,
-                letterSpacing: 1,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
+            // ── Management ────────────────────────────────────
+            if (can(Permission.manageExpenses) ||
+                can(Permission.viewActivityLog) ||
+                can(Permission.manageStaff)) ...[
+              const SectionLabel('Management'),
+              if (can(Permission.manageExpenses))
+                _tile(
+                  icon: Icons.receipt_rounded,
+                  title: 'Expenses',
+                  subtitle: 'Record spending and cash paid out of the till',
+                  onTap: () => _open(const ExpensesScreen()),
+                ),
+              if (can(Permission.viewActivityLog))
+                _tile(
+                  icon: Icons.history_rounded,
+                  title: 'Activity Log',
+                  subtitle: 'Sign-ins, sales, voids, refunds and stock changes',
+                  onTap: () => _open(const ActivityLogScreen()),
+                ),
+              if (can(Permission.manageStaff))
+                _tile(
+                  icon: Icons.manage_accounts_rounded,
+                  title: 'Manage Staff',
+                  subtitle: 'Add staff, set roles, reset PINs, deactivate',
+                  onTap: () => _open(const ManageStaffScreen()),
+                ),
+              if (can(Permission.voidAndRefund))
+                _tile(
+                  icon: Icons.pending_actions_rounded,
+                  title: 'Pending MoMo Payments',
+                  subtitle: 'Reconcile charges that timed out or were not saved',
+                  color: AppColors.warning,
+                  onTap: () => _open(const PendingMomoScreen()),
+                ),
+            ],
 
-            const TouchableCard(
-              child: Column(
-                children: [
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.payments_rounded, color: AppColors.primary),
-                    title: Text('Store Currency'),
-                    subtitle: Text('${AppConstants.currencySymbol} (${AppConstants.currencyCode})', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                  ),
-                  Divider(),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.touch_app_rounded, color: AppColors.info),
-                    title: Text('Interface Mode'),
-                    subtitle: Text('Touch-First Shop Floor POS', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                  ),
-                ],
+            if (can(Permission.manageProducts)) ...[
+              const SectionLabel('Inventory'),
+              _tile(
+                icon: Icons.file_upload_outlined,
+                title: 'Import Products (CSV / Excel)',
+                subtitle: 'Bulk import catalog & stock quantities',
+                onTap: _openCsvImportDialog,
               ),
-            ),
+            ],
 
-            const SizedBox(height: AppSpacing.xl),
-            const Text(
-              'ABOUT',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textSecondary,
-                letterSpacing: 1,
+            // ── Store (owner) ─────────────────────────────────
+            if (can(Permission.manageSettings)) ...[
+              const SectionLabel('Store'),
+              _tile(
+                icon: Icons.storefront_rounded,
+                title: 'Store Settings',
+                subtitle: 'Profile, currency, VAT, receipts, payment methods, hardware',
+                onTap: () => _open(const StoreSettingsScreen()),
               ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
+              _tile(
+                icon: Icons.cloud_sync_rounded,
+                title: 'Integrations',
+                subtitle: 'Mobile Money backend and cloud sync',
+                onTap: () => _open(const IntegrationsScreen()),
+              ),
+              _tile(
+                icon: Icons.backup_rounded,
+                title: 'Backup & Restore',
+                subtitle: store.lastBackupAt == null
+                    ? 'No backup yet — make one now'
+                    : 'Save all data to a file, or restore from one',
+                color: store.lastBackupAt == null ? AppColors.warning : AppColors.primary,
+                onTap: () => _open(const BackupScreen()),
+              ),
+            ],
 
+            // ── About ─────────────────────────────────────────
+            const SectionLabel('About'),
             TouchableCard(
-              child: Column(
-                children: [
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.store_rounded, color: AppColors.primary),
-                    title: Text('Application'),
-                    subtitle: Text('ShopPOS Offline-First Point of Sale', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                  ),
-                  const Divider(),
-
-                  InkWell(
-                    onTap: _onVersionTileTapped,
-                    borderRadius: AppSpacing.borderMd,
-                    child: const ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.info_outline_rounded, color: AppColors.textSecondary),
-                      title: Text('ShopPOS Version'),
-                      subtitle: Text('v1.2.0 (Build 2026.07)', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                    ),
-                  ),
-                ],
+              child: InkWell(
+                onTap: _onVersionTileTapped,
+                borderRadius: AppSpacing.borderMd,
+                child: const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.info_outline_rounded, color: AppColors.textSecondary),
+                  title: Text('ShopPOS Version'),
+                  subtitle: Text('v${AppConstants.appVersion}',
+                      style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                ),
               ),
             ),
 
             const SizedBox(height: AppSpacing.xxl),
 
-            // Logout Button
+            // ShopPOSApp returns to the role picker once the user is null.
             ElevatedButton.icon(
-              onPressed: () {
-                ref.read(currentUserProvider.notifier).logout();
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                );
-              },
+              onPressed: () => ref.read(currentUserProvider.notifier).logout(),
               icon: const Icon(Icons.logout_rounded),
               label: const Text('Sign Out'),
               style: ElevatedButton.styleFrom(

@@ -10,10 +10,12 @@ library;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:isar/isar.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/models/sale.dart';
+import 'package:shop_pos/features/sales/services/sale_calculator.dart';
 
 /// Time period filter for the cashier sales history
 enum CashierSalesPeriod {
@@ -29,10 +31,13 @@ final cashierSalesPeriodProvider = StateProvider<CashierSalesPeriod>((ref) {
 
 /// Aggregated stats computed from the cashier's filtered sales
 class CashierSalesStats {
+  /// Net of refunds; voided sales count for nothing.
   final double totalRevenue;
   final int totalCount;
   final double cashRevenue;
   final int cashCount;
+
+  /// Everything not paid in cash (MoMo, card, QR).
   final double momoRevenue;
   final int momoCount;
   final double averageSale;
@@ -47,104 +52,71 @@ class CashierSalesStats {
     required this.averageSale,
   });
 
-  factory CashierSalesStats.empty() {
-    return const CashierSalesStats(
-      totalRevenue: 0.0,
-      totalCount: 0,
-      cashRevenue: 0.0,
-      cashCount: 0,
-      momoRevenue: 0.0,
-      momoCount: 0,
-      averageSale: 0.0,
-    );
-  }
+  factory CashierSalesStats.empty() => CashierSalesStats.fromSales(const []);
 
   factory CashierSalesStats.fromSales(List<Sale> sales) {
     double total = 0.0;
     double cash = 0.0;
-    double momo = 0.0;
+    double other = 0.0;
     int cCount = 0;
-    int mCount = 0;
+    int oCount = 0;
+    int count = 0;
 
-    for (final s in sales) {
-      total += s.totalAmount;
-      if (s.paymentType == 'cash') {
-        cash += s.totalAmount;
-        cCount++;
-      } else {
-        momo += s.totalAmount;
-        mCount++;
+    for (final s in sales.where((s) => !s.isVoided)) {
+      count++;
+      total += s.netAmount;
+      // Split the net amount across methods in proportion to what was paid.
+      final scale = s.totalAmount == 0 ? 0.0 : s.netAmount / s.totalAmount;
+      var hadCash = false;
+      var hadOther = false;
+      for (final p in s.effectivePayments) {
+        if (p.method == AppConstants.paymentCash) {
+          cash += p.amount * scale;
+          hadCash = true;
+        } else {
+          other += p.amount * scale;
+          hadOther = true;
+        }
       }
+      if (hadCash) cCount++;
+      if (hadOther) oCount++;
     }
 
     return CashierSalesStats(
-      totalRevenue: total,
-      totalCount: sales.length,
-      cashRevenue: cash,
+      totalRevenue: roundMoney(total),
+      totalCount: count,
+      cashRevenue: roundMoney(cash),
       cashCount: cCount,
-      momoRevenue: momo,
-      momoCount: mCount,
-      averageSale: sales.isNotEmpty ? (total / sales.length) : 0.0,
+      momoRevenue: roundMoney(other),
+      momoCount: oCount,
+      averageSale: count > 0 ? roundMoney(total / count) : 0.0,
     );
   }
 }
 
-/// Reactive real-time stream of sales made by the current cashier
+/// Live list of sales rung up by the signed-in user in the chosen period.
+/// Only that user's own sales: never other staff's, never unattributed.
 final cashierSalesStreamProvider =
     StreamProvider.autoDispose<List<Sale>>((ref) {
   final isar = ref.watch(isarProvider);
   final currentUser = ref.watch(currentUserProvider);
   final period = ref.watch(cashierSalesPeriodProvider);
+  if (currentUser == null) return Stream.value(const []);
 
   final now = DateTime.now();
-  final DateTime? startOfPeriod;
-  final endOfPeriod = DateHelpers.endOfDay(now);
+  final DateTime start = switch (period) {
+    CashierSalesPeriod.today => DateHelpers.startOfDay(now),
+    CashierSalesPeriod.week =>
+      DateHelpers.startOfDay(now.subtract(const Duration(days: 6))),
+    CashierSalesPeriod.all => DateTime(2000),
+  };
 
-  switch (period) {
-    case CashierSalesPeriod.today:
-      startOfPeriod = DateHelpers.startOfDay(now);
-      break;
-    case CashierSalesPeriod.week:
-      startOfPeriod =
-          DateHelpers.startOfDay(now.subtract(const Duration(days: 7)));
-      break;
-    case CashierSalesPeriod.all:
-      startOfPeriod = null;
-      break;
-  }
-
-  final currentCashierId = currentUser?.id ?? 0;
-
-  final Stream<List<Sale>> rawStream;
-  if (startOfPeriod != null) {
-    rawStream = isar.sales
-        .filter()
-        .timestampBetween(startOfPeriod, endOfPeriod)
-        .sortByTimestampDesc()
-        .watch(fireImmediately: true);
-  } else {
-    rawStream = isar.sales
-        .where()
-        .sortByTimestampDesc()
-        .watch(fireImmediately: true);
-  }
-
-  return rawStream.map((sales) {
-    if (currentCashierId > 0) {
-      // Find sales strictly tagged with this cashier's ID
-      final userSales =
-          sales.where((s) => s.cashierId == currentCashierId).toList();
-      if (userSales.isNotEmpty) {
-        return userSales;
-      }
-      // If none are tagged with this ID yet, include legacy/unattributed sales (cashierId == 0)
-      return sales
-          .where(
-              (s) => s.cashierId == currentCashierId || s.cashierId == 0)
-          .toList();
-    }
-    return sales;
-  });
+  return isar.sales
+      .filter()
+      .cashierIdEqualTo(currentUser.id)
+      .timestampBetween(start, DateHelpers.endOfDay(now))
+      .sortByTimestampDesc()
+      .watch(fireImmediately: true);
 });
 
 /// Reactive derived statistics for the cashier's filtered sales

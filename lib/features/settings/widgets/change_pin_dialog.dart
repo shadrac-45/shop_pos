@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Change PIN Dialog — ShopPOS
 /// ============================================
 /// Allows any logged-in staff member (Owner or Cashier)
@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
@@ -260,6 +261,9 @@ class _ChangePinDialogState extends ConsumerState<ChangePinDialog> {
                     }
                     if (v.trim().length < 4 || v.trim().length > 6) {
                       return 'PIN must be 4 to 6 digits';
+                    }
+                    if (AppConstants.defaultPins.contains(v.trim())) {
+                      return 'Default PINs are not allowed';
                     }
                     if (v.trim() == _currentPinController.text.trim()) {
                       return 'New PIN must be different from current PIN';

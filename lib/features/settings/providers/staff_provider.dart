@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// Staff Provider — ShopPOS
 /// ============================================
 /// Provides Owner-only CRUD operations for cashier
@@ -17,6 +17,9 @@ import 'package:shop_pos/features/auth/models/app_user.dart';
 import 'package:shop_pos/features/auth/services/auth_service.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/utils/id_helpers.dart';
+import 'package:shop_pos/features/activity/models/activity_log.dart';
+import 'package:shop_pos/features/activity/services/activity_log_service.dart';
 
 // ── Result type ──────────────────────────────────────────
 
@@ -51,12 +54,39 @@ class StaffService {
     return user != null && user.role == AppConstants.roleOwner;
   }
 
-  /// Return all cashier accounts, ordered by creation time (id ascending).
+  /// All staff accounts except the owner (cashiers, managers, stock
+  /// clerks), ordered by creation time (id ascending).
   Future<List<AppUser>> getAllCashiers() async {
     return _isar.appUsers
         .filter()
-        .roleEqualTo('cashier')
+        .not()
+        .roleEqualTo(AppConstants.roleOwner)
         .findAll();
+  }
+
+  Future<void> _log(String details) => ActivityLogService.log(
+      _isar, _ref.read(currentUserProvider), ActivityAction.staffChanged, details);
+
+  /// The owner account can't be changed through staff management.
+  Future<AppUser?> _staffMember(int userId) async {
+    final user = await _isar.appUsers.get(userId);
+    return (user == null || user.role == AppConstants.roleOwner) ? null : user;
+  }
+
+  /// Changes a staff member's role (cashier / manager / stock clerk).
+  Future<StaffOperationResult> changeRole(int userId, String role) async {
+    if (!_isCallerOwner()) return StaffOperationResult.unauthorized;
+    if (!AppConstants.staffRoles.contains(role)) return StaffOperationResult.error;
+    final user = await _staffMember(userId);
+    if (user == null) return StaffOperationResult.userNotFound;
+    final before = user.role;
+    user
+      ..role = role
+      ..updatedAt = DateTime.now()
+      ..isSynced = false;
+    await _isar.writeTxn(() => _isar.appUsers.put(user));
+    await _log('${user.name}: ${AppConstants.roleLabel(before)} → ${AppConstants.roleLabel(role)}');
+    return StaffOperationResult.success;
   }
 
   /// Check whether a PIN is already assigned to any staff account (Owner or Cashier).
@@ -84,13 +114,17 @@ class StaffService {
   Future<StaffOperationResult> createCashier({
     required String name,
     required String pin,
+    String role = AppConstants.roleCashier,
   }) async {
+    if (!AppConstants.staffRoles.contains(role)) return StaffOperationResult.error;
     if (!_isCallerOwner()) {
       return StaffOperationResult.unauthorized;
     }
 
     final trimmedPin = pin.trim();
-    if (trimmedPin.length < 4 || trimmedPin.length > 6) {
+    if (trimmedPin.length < 4 ||
+        trimmedPin.length > 6 ||
+        AppConstants.defaultPins.contains(trimmedPin)) {
       return StaffOperationResult.invalidPin;
     }
 
@@ -102,13 +136,16 @@ class StaffService {
 
     final newUser = AppUser()
       ..name = name.trim()
-      ..role = 'cashier'
+      ..role = role
       ..isActive = true
-      ..pinHash = AuthService.hashPin(trimmedPin);
+      ..pinHash = AuthService.hashPin(trimmedPin)
+      ..uuid = IdHelpers.newUuid()
+      ..updatedAt = DateTime.now();
 
     await _isar.writeTxn(() async {
       await _isar.appUsers.put(newUser);
     });
+    await _log('Added ${AppConstants.roleLabel(role)} ${newUser.name}');
 
     return StaffOperationResult.success;
   }
@@ -120,13 +157,17 @@ class StaffService {
       return StaffOperationResult.unauthorized;
     }
 
-    final user = await _isar.appUsers.get(userId);
+    final user = await _staffMember(userId);
     if (user == null) return StaffOperationResult.userNotFound;
 
-    user.isActive = false;
+    user
+      ..isActive = false
+      ..updatedAt = DateTime.now()
+      ..isSynced = false;
     await _isar.writeTxn(() async {
       await _isar.appUsers.put(user);
     });
+    await _log('Deactivated ${user.name}');
     return StaffOperationResult.success;
   }
 
@@ -136,13 +177,17 @@ class StaffService {
       return StaffOperationResult.unauthorized;
     }
 
-    final user = await _isar.appUsers.get(userId);
+    final user = await _staffMember(userId);
     if (user == null) return StaffOperationResult.userNotFound;
 
-    user.isActive = true;
+    user
+      ..isActive = true
+      ..updatedAt = DateTime.now()
+      ..isSynced = false;
     await _isar.writeTxn(() async {
       await _isar.appUsers.put(user);
     });
+    await _log('Reactivated ${user.name}');
     return StaffOperationResult.success;
   }
 
@@ -153,11 +198,13 @@ class StaffService {
       return StaffOperationResult.unauthorized;
     }
 
-    final user = await _isar.appUsers.get(userId);
+    final user = await _staffMember(userId);
     if (user == null) return StaffOperationResult.userNotFound;
 
     final trimmedPin = newPin.trim();
-    if (trimmedPin.length < 4 || trimmedPin.length > 6) {
+    if (trimmedPin.length < 4 ||
+        trimmedPin.length > 6 ||
+        AppConstants.defaultPins.contains(trimmedPin)) {
       return StaffOperationResult.invalidPin;
     }
 
@@ -166,10 +213,14 @@ class StaffService {
       return StaffOperationResult.pinAlreadyExists;
     }
 
-    user.pinHash = AuthService.hashPin(trimmedPin);
+    user
+      ..pinHash = AuthService.hashPin(trimmedPin)
+      ..updatedAt = DateTime.now()
+      ..isSynced = false;
     await _isar.writeTxn(() async {
       await _isar.appUsers.put(user);
     });
+    await _log('Reset PIN for ${user.name}');
     return StaffOperationResult.success;
   }
 

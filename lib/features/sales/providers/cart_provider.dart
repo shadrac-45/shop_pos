@@ -1,37 +1,75 @@
+/// ============================================
+/// Cart Provider — ShopPOS
+/// ============================================
+/// The till's current cart: lines, line and sale
+/// discounts, and completing the sale through
+/// [SaleService].
+/// ============================================
+library;
+
 import 'dart:convert';
+
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:isar/isar.dart';
-import 'package:shop_pos/core/constants/app_constants.dart';
-import 'package:shop_pos/features/products/models/product.dart';
-import 'package:shop_pos/features/products/models/batch.dart';
-import 'package:shop_pos/features/sales/models/sale.dart';
+
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/core/providers/store_settings_provider.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/products/services/inventory_service.dart';
 import 'package:shop_pos/features/reports/providers/report_provider.dart';
+import 'package:shop_pos/features/sales/models/sale.dart';
+import 'package:shop_pos/features/sales/services/sale_calculator.dart';
+import 'package:shop_pos/features/sales/services/sale_service.dart';
 
 final cartProvider = StateNotifierProvider<CartNotifier, List<CartItem>>((ref) {
   return CartNotifier(ref);
 });
 
-enum AddItemResult { success, notFound, outOfStock, expired }
+/// Discount on the whole sale (money, not percent).
+final cartSaleDiscountProvider = StateProvider<double>((ref) => 0);
+
+/// Live totals for the cart, including VAT and discounts.
+final cartTotalsProvider = Provider<SaleTotals>((ref) {
+  final cart = ref.watch(cartProvider);
+  return SaleService.totalsFor(
+    [for (final i in cart) i.toCheckoutLine()],
+    saleDiscount: ref.watch(cartSaleDiscountProvider),
+    tax: ref.watch(taxConfigProvider),
+  );
+});
+
+enum AddItemResult { success, notFound, outOfStock, expired, archived }
 
 class CartItem {
   final Product product;
-  final Batch batch;
   final int quantity;
+
+  /// Discount on the whole line.
+  final double discount;
+
+  /// Sellable units across all unexpired batches when the item was last
+  /// added; caps the quantity (the sale itself re-checks live stock).
+  final int available;
 
   CartItem({
     required this.product,
-    required this.batch,
     required this.quantity,
+    required this.available,
+    this.discount = 0,
   });
 
-  double get subtotal => product.price * quantity;
+  double get gross => roundMoney(product.price * quantity);
+  double get subtotal => roundMoney(gross - discount.clamp(0, gross));
 
-  CartItem copyWith({int? quantity}) {
+  CheckoutLine toCheckoutLine() =>
+      CheckoutLine(product: product, quantity: quantity, discount: discount);
+
+  CartItem copyWith({int? quantity, double? discount, int? available}) {
     return CartItem(
       product: product,
-      batch: batch,
       quantity: quantity ?? this.quantity,
+      discount: discount ?? this.discount,
+      available: available ?? this.available,
     );
   }
 }
@@ -41,208 +79,125 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
 
   CartNotifier(this.ref) : super([]);
 
-  /// Add item to cart using FEFO (First Expired, First Out)
+  /// Adds [quantity] of [product], allowing up to the total sellable stock
+  /// across every unexpired batch.
   Future<AddItemResult> addItem(Product product, int quantity) async {
     final isar = ref.read(isarProvider);
 
     final freshProduct = await isar.products.get(product.id);
     if (freshProduct == null) return AddItemResult.notFound;
-
+    if (freshProduct.isArchived) return AddItemResult.archived;
     await freshProduct.batches.load();
 
-    if (freshProduct.isExpired) {
-      return AddItemResult.expired;
+    final available = await InventoryService.sellableQuantity(isar, freshProduct.id);
+    if (available <= 0) {
+      return freshProduct.totalStock > 0
+          ? AddItemResult.expired
+          : AddItemResult.outOfStock;
     }
 
-    final soonestBatch = freshProduct.soonestExpiryBatch;
-
-    // Check existing item in cart
-    final existingIndex = state.indexWhere((item) => item.product.id == freshProduct.id);
-    final currentQtyInCart = existingIndex >= 0 ? state[existingIndex].quantity : 0;
-    final totalRequestedQty = currentQtyInCart + quantity;
-
-    if (soonestBatch == null || soonestBatch.quantity < totalRequestedQty) {
-      return AddItemResult.outOfStock;
-    }
+    final existingIndex =
+        state.indexWhere((item) => item.product.id == freshProduct.id);
+    final currentQty = existingIndex >= 0 ? state[existingIndex].quantity : 0;
+    final requested = currentQty + quantity;
+    if (requested > available) return AddItemResult.outOfStock;
 
     if (existingIndex >= 0) {
-      final updatedList = [...state];
-      updatedList[existingIndex] = updatedList[existingIndex].copyWith(
-        quantity: totalRequestedQty,
-      );
-      state = updatedList;
+      final updated = [...state];
+      updated[existingIndex] = updated[existingIndex]
+          .copyWith(quantity: requested, available: available);
+      state = updated;
     } else {
-      final newItem = CartItem(
-        product: freshProduct,
-        batch: soonestBatch,
-        quantity: quantity,
-      );
-      state = [...state, newItem];
+      state = [
+        ...state,
+        CartItem(product: freshProduct, quantity: quantity, available: available),
+      ];
     }
-
     return AddItemResult.success;
   }
 
-  /// Update item quantity by delta (+1 or -1)
-  void updateQuantity(int index, int delta) {
-    if (index < 0 || index >= state.length) return;
-
-    final newQty = state[index].quantity + delta;
+  /// Changes a line's quantity by [delta]. Returns false if that would
+  /// exceed available stock.
+  bool updateQuantity(int index, int delta) {
+    if (index < 0 || index >= state.length) return false;
+    final item = state[index];
+    final newQty = item.quantity + delta;
     if (newQty <= 0) {
       removeItem(index);
-    } else {
-      // Check batch capacity before increasing
-      if (delta > 0 && state[index].batch.quantity < newQty) {
-        return; // Exceeds available batch stock
-      }
-      final updatedList = [...state];
-      updatedList[index] = updatedList[index].copyWith(quantity: newQty);
-      state = updatedList;
+      return true;
     }
+    if (delta > 0 && newQty > item.available) return false;
+    final updated = [...state];
+    updated[index] = item.copyWith(
+      quantity: newQty,
+      // Keep the discount within the (possibly smaller) line value.
+      discount: item.discount.clamp(0, item.product.price * newQty).toDouble(),
+    );
+    state = updated;
+    return true;
+  }
+
+  void setLineDiscount(int index, double discount) {
+    if (index < 0 || index >= state.length) return;
+    final item = state[index];
+    final updated = [...state];
+    updated[index] =
+        item.copyWith(discount: roundMoney(discount.clamp(0, item.gross).toDouble()));
+    state = updated;
   }
 
   void removeItem(int index) {
     if (index < 0 || index >= state.length) return;
     state = [...state]..removeAt(index);
+    if (state.isEmpty) ref.read(cartSaleDiscountProvider.notifier).state = 0;
   }
 
   void clearCart() {
     state = [];
+    ref.read(cartSaleDiscountProvider.notifier).state = 0;
   }
 
-  double get totalAmount => state.fold(0.0, (sum, item) => sum + item.subtotal);
+  double get totalAmount => ref.read(cartTotalsProvider).total;
 
-  // ── Private Helpers ─────────────────────────────────────
-
-  String _serializeCartItems() {
-    final itemsList = state
-        .map((e) => {
-              'productId': e.product.id,
-              'productName': e.product.name,
-              'quantity': e.quantity,
-              'price': e.product.price,
-            })
-        .toList();
-    return jsonEncode(itemsList);
-  }
-
-  Future<void> _deductStock(Isar isar) async {
-    for (var item in state) {
-      var remainingToDeduct = item.quantity;
-
-      // 1. Deduct from the selected batch first
-      final primaryBatch = await isar.batchs.get(item.batch.id);
-      if (primaryBatch != null) {
-        if (primaryBatch.quantity >= remainingToDeduct) {
-          primaryBatch.quantity -= remainingToDeduct;
-          remainingToDeduct = 0;
-          await isar.batchs.put(primaryBatch);
-        } else {
-          remainingToDeduct -= primaryBatch.quantity;
-          primaryBatch.quantity = 0;
-          await isar.batchs.put(primaryBatch);
-        }
-      }
-
-      // 2. If needed, deduct remaining quantity from other active batches of this product
-      if (remainingToDeduct > 0) {
-        final otherBatches = await isar.batchs
-            .filter()
-            .productIdEqualTo(item.product.id)
-            .quantityGreaterThan(0)
-            .sortByExpiryDate()
-            .findAll();
-
-        for (final b in otherBatches) {
-          if (b.id == item.batch.id) continue;
-          if (b.quantity >= remainingToDeduct) {
-            b.quantity -= remainingToDeduct;
-            remainingToDeduct = 0;
-            await isar.batchs.put(b);
-            break;
-          } else {
-            remainingToDeduct -= b.quantity;
-            b.quantity = 0;
-            await isar.batchs.put(b);
+  /// The cart lines as JSON, for records kept outside the database
+  /// (pending MoMo payments).
+  String get itemsJson => jsonEncode([
+        for (final e in state)
+          {
+            'productId': e.product.id,
+            'productName': e.product.name,
+            'quantity': e.quantity,
+            'price': e.product.price,
+            'discount': e.discount,
           }
-        }
-      }
+      ]);
 
-      // 3. Touch the product to trigger collection listeners
-      final productToTouch = await isar.products.get(item.product.id);
-      if (productToTouch != null) {
-        await isar.products.put(productToTouch);
-      }
-    }
-  }
-
-  // ── Sale Completion ─────────────────────────────────────
-
-  /// Complete the sale and deduct stock from batches.
-  /// [cashierId] is the AppUser.id of the logged-in staff member (0 = unknown).
-  Future<bool> completeSale(
-    String paymentType, {
-    int cashierId = 0,
+  /// Records the sale and empties the cart. Throws
+  /// [SaleValidationException], [InsufficientStockException] or
+  /// a PermissionDeniedException with a message for the cashier.
+  Future<Sale> completeSale({
+    required List<PaymentInput> payments,
+    double? amountTendered,
+    String? paystackReference,
+    String? momoProvider,
+    String? momoPhone,
+    int? cashierId,
   }) async {
-    final isar = ref.read(isarProvider);
-
-    try {
-      await isar.writeTxn(() async {
-        await _deductStock(isar);
-
-        final sale = Sale()
-          ..timestamp = DateTime.now()
-          ..cashierId = cashierId
-          ..totalAmount = totalAmount
-          ..paymentType = paymentType
-          ..itemsJson = _serializeCartItems()
-          ..isSynced = false;
-
-        await isar.sales.put(sale);
-      });
-
-      clearCart();
-      ref.read(reportProvider.notifier).loadTodaySales(force: true);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// Complete a Mobile Money sale via Paystack charge.
-  /// [cashierId] is the AppUser.id of the logged-in staff member (0 = unknown).
-  Future<bool> completeSaleMomo({
-    required String paystackReference,
-    required String provider,
-    required String phone,
-    int cashierId = 0,
-  }) async {
-    final isar = ref.read(isarProvider);
-
-    try {
-      await isar.writeTxn(() async {
-        await _deductStock(isar);
-
-        final sale = Sale()
-          ..timestamp = DateTime.now()
-          ..cashierId = cashierId
-          ..totalAmount = totalAmount
-          ..paymentType = AppConstants.paymentMomoPaystack
-          ..itemsJson = _serializeCartItems()
-          ..isSynced = false
-          ..paystackReference = paystackReference
-          ..momoProvider = provider
-          ..momoPhone = phone;
-
-        await isar.sales.put(sale);
-      });
-
-      clearCart();
-      // Force refresh the report provider state so reports reflect the new sale immediately
-      ref.read(reportProvider.notifier).loadTodaySales(force: true);
-      return true;
-    } catch (_) {
-      return false;
-    }
+    final sale = await SaleService.completeSale(
+      ref.read(isarProvider),
+      ref.read(currentUserProvider),
+      lines: [for (final i in state) i.toCheckoutLine()],
+      payments: payments,
+      saleDiscount: ref.read(cartSaleDiscountProvider),
+      tax: ref.read(taxConfigProvider),
+      amountTendered: amountTendered,
+      paystackReference: paystackReference,
+      momoProvider: momoProvider,
+      momoPhone: momoPhone,
+      cashierId: cashierId,
+    );
+    clearCart();
+    ref.read(reportProvider.notifier).refresh();
+    return sale;
   }
 }

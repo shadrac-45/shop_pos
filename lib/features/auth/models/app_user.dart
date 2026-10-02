@@ -38,6 +38,12 @@ class AppUser {
   /// Whether this account is active. Owners can deactivate cashier accounts
   /// without deleting them (preserving sales history references).
   bool isActive = true;
+
+  /// Stable ID used for sync and backups.
+  String? uuid;
+
+  DateTime? updatedAt;
+  bool isSynced = false;
 }
 
 /// Application-level uniqueness helpers.

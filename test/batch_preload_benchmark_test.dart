@@ -2,10 +2,9 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:isar/isar.dart';
+import 'package:shop_pos/core/database/schemas.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
-import 'package:shop_pos/features/sales/models/sale.dart';
-import 'package:shop_pos/features/auth/models/app_user.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -19,7 +18,7 @@ void main() {
     });
     tempDir = await Directory.systemTemp.createTemp('isar_batch_preload_test_');
     isar = await Isar.open(
-      [SaleSchema, ProductSchema, BatchSchema, AppUserSchema],
+      allSchemas,
       directory: tempDir.path,
     );
   });

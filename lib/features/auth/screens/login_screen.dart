@@ -2,10 +2,10 @@
 /// Login Screen — ShopPOS
 /// ============================================
 /// Single, unified PIN-based authentication.
-///  • Standard 4-digit numeric PIN keypad
+///  • 4–6 digit numeric PIN keypad (Enter submits; 6 digits auto-submit)
 ///  • Auto-detects user identity and role (Owner vs Cashier)
 ///  • Security: Blocks deactivated accounts with clear feedback
-///  • Security: 3 failed attempts trigger a 30-second lockout
+///  • Security: 5 failed attempts trigger a 30-second lockout
 /// ============================================
 library;
 
@@ -13,9 +13,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:shop_pos/core/constants/app_assets.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
@@ -31,18 +31,12 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  // ── Persistent Lockout Security State ──────────────────────────
-  // Counts and lockout expiry are persisted to SharedPreferences so that
-  // closing and re-opening the app cannot bypass the lockout window.
-  static const _kFailedAttemptsKey = 'login_failed_attempts';
-  static const _kLockoutExpiryKey  = 'login_lockout_expiry_ms';
-
   // ── PIN Entry State ─────────────────────────────────────
-  final List<String> _pin = List.filled(4, '');
-  int _currentIndex = 0;
+  String _pin = '';
   bool _isAuthenticating = false;
 
-  int _failedAttempts = 0;
+  // The lockout itself lives in AuthNotifier (and survives restarts);
+  // this only mirrors it for the countdown banner.
   bool _isLockedOut = false;
   int _lockoutSeconds = 0;
   Timer? _lockoutTimer;
@@ -50,30 +44,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    _restoreLockoutState();
-  }
-
-  /// On startup, check if a lockout is still active from a previous session.
-  Future<void> _restoreLockoutState() async {
-    final prefs = await SharedPreferences.getInstance();
-    final expiryMs = prefs.getInt(_kLockoutExpiryKey) ?? 0;
-    final remaining = expiryMs - DateTime.now().millisecondsSinceEpoch;
-    if (remaining > 0) {
-      final remainingSecs = (remaining / 1000).ceil();
-      if (!mounted) return;
-      setState(() {
-        _failedAttempts = prefs.getInt(_kFailedAttemptsKey) ?? 3;
-        _lockoutSeconds = remainingSecs;
-        _isLockedOut = true;
-        _pin.fillRange(0, 4, '');
-        _currentIndex = 0;
-      });
-      _resumeLockoutCountdown();
-    } else {
-      // Lockout has expired — clear stored state.
-      await prefs.remove(_kLockoutExpiryKey);
-      await prefs.remove(_kFailedAttemptsKey);
-    }
+    // Let AuthNotifier finish restoring a saved lockout, then show it.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncLockout());
   }
 
   @override
@@ -82,149 +54,105 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  /// Starts a new 30-second lockout and persists it so app restarts can't bypass it.
-  Future<void> _startLockoutTimer() async {
-    final expiryMs = DateTime.now().millisecondsSinceEpoch + 30000;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kLockoutExpiryKey, expiryMs);
-    await prefs.setInt(_kFailedAttemptsKey, _failedAttempts);
-
+  /// Shows the provider's lockout, if any, and counts it down.
+  void _syncLockout() {
+    if (!mounted) return;
+    final auth = ref.read(currentUserProvider.notifier);
+    final locked = auth.isLockedOut;
     setState(() {
-      _isLockedOut = true;
-      _lockoutSeconds = 30;
-      _pin.fillRange(0, 4, '');
-      _currentIndex = 0;
+      _isLockedOut = locked;
+      _lockoutSeconds = auth.lockoutSecondsRemaining;
+      if (locked) _pin = '';
     });
-    _resumeLockoutCountdown();
-  }
-
-  /// Ticks down _lockoutSeconds and clears the lockout when it reaches zero.
-  void _resumeLockoutCountdown() {
     _lockoutTimer?.cancel();
-    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      if (!mounted) return;
-      setState(() {
-        if (_lockoutSeconds > 1) {
-          _lockoutSeconds--;
-        } else {
-          _isLockedOut = false;
-          _lockoutSeconds = 0;
-          _failedAttempts = 0;
-          timer.cancel();
-        }
-      });
-      if (!_isLockedOut) {
-        // Clear persisted lockout once it expires.
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove(_kLockoutExpiryKey);
-        await prefs.remove(_kFailedAttemptsKey);
-      }
-    });
+    if (locked) {
+      _lockoutTimer =
+          Timer.periodic(const Duration(seconds: 1), (_) => _syncLockout());
+    }
   }
 
   void _onNumberPress(String number) {
     if (_isLockedOut || _isAuthenticating) return;
 
-    if (_currentIndex < 4) {
+    if (_pin.length < AppConstants.maxPinLength) {
       HapticFeedback.lightImpact();
-      setState(() {
-        _pin[_currentIndex] = number;
-        _currentIndex++;
-      });
-      if (_currentIndex == 4) {
+      setState(() => _pin += number);
+      // A full-length PIN can't grow any further, so submit it straight away.
+      if (_pin.length == AppConstants.maxPinLength) {
         _attemptLogin();
       }
     }
   }
 
+  void _onSubmit() {
+    if (_isLockedOut || _isAuthenticating) return;
+    if (_pin.length < AppConstants.minPinLength) {
+      HapticFeedback.vibrate();
+      context.showErrorSnackbar(
+        'PIN must be at least ${AppConstants.minPinLength} digits.',
+      );
+      return;
+    }
+    _attemptLogin();
+  }
+
   void _onBackspace() {
     if (_isLockedOut || _isAuthenticating) return;
 
-    if (_currentIndex > 0) {
+    if (_pin.isNotEmpty) {
       HapticFeedback.selectionClick();
-      setState(() {
-        _currentIndex--;
-        _pin[_currentIndex] = '';
-      });
+      setState(() => _pin = _pin.substring(0, _pin.length - 1));
     }
   }
 
   Future<void> _attemptLogin() async {
     setState(() => _isAuthenticating = true);
-    final enteredPin = _pin.join();
+    final enteredPin = _pin;
+    final auth = ref.read(currentUserProvider.notifier);
 
-    // Timing instrumentation — visible in debug console.
-    final sw = Stopwatch()..start();
-    final result = await ref.read(currentUserProvider.notifier).login(enteredPin);
-    sw.stop();
-    debugPrint('[ShopPOS Login] PIN verify + DB lookup: ${sw.elapsedMilliseconds}ms');
-
-    final user = ref.read(currentUserProvider);
+    final result = await auth.login(enteredPin);
 
     if (!mounted) return;
-    setState(() => _isAuthenticating = false);
+    setState(() {
+      _isAuthenticating = false;
+      _pin = '';
+    });
 
     switch (result) {
       case LoginResult.success:
-        if (user != null) {
-          HapticFeedback.mediumImpact();
-          setState(() => _failedAttempts = 0);
-          // Clear any residual persisted attempt count on successful login.
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.remove(_kFailedAttemptsKey);
-          await prefs.remove(_kLockoutExpiryKey);
-          if (!mounted) return;
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const MainShellScreen()),
-            (_) => false,
-          );
-        }
+        HapticFeedback.mediumImpact();
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const MainShellScreen()),
+          (_) => false,
+        );
 
       case LoginResult.deactivated:
         HapticFeedback.vibrate();
-        setState(() {
-          _pin.fillRange(0, 4, '');
-          _currentIndex = 0;
-        });
         context.showErrorSnackbar(
           'This account has been deactivated — please contact the shop owner.',
         );
 
+      case LoginResult.defaultPin:
+        HapticFeedback.vibrate();
+        context.showErrorSnackbar(
+          'This is a default PIN and can no longer be used. Owner: sign in '
+          'with your admin email and set a new PIN. Staff: ask the owner '
+          'to reset your PIN.',
+        );
+
       case LoginResult.lockedOut:
         HapticFeedback.vibrate();
-        final remaining =
-            ref.read(currentUserProvider.notifier).lockoutSecondsRemaining;
-        setState(() {
-          _pin.fillRange(0, 4, '');
-          _currentIndex = 0;
-          _isLockedOut = true;
-          _lockoutSeconds = remaining > 0 ? remaining : 30;
-        });
-        _resumeLockoutCountdown();
+        _syncLockout();
         context.showErrorSnackbar(
-          'Too many failed attempts. Keypad locked for ${_lockoutSeconds}s.',
+          'Too many failed attempts. Keypad locked for ${auth.lockoutSecondsRemaining}s.',
         );
 
       case LoginResult.invalidPin:
         HapticFeedback.vibrate();
-        _failedAttempts++;
-        setState(() {
-          _pin.fillRange(0, 4, '');
-          _currentIndex = 0;
-        });
-
-        if (_failedAttempts >= 3) {
-          await _startLockoutTimer();
-          if (!mounted) return;
-          context.showErrorSnackbar(
-            'Too many failed attempts. Keypad locked for 30s.',
-          );
-        } else {
-          final remaining = 3 - _failedAttempts;
-          context.showErrorSnackbar(
-            'Incorrect PIN ($remaining attempt${remaining == 1 ? '' : 's'} remaining before lockout).',
-          );
-        }
+        final remaining = auth.attemptsBeforeLockout;
+        context.showErrorSnackbar(
+          'Incorrect PIN ($remaining attempt${remaining == 1 ? '' : 's'} remaining before lockout).',
+        );
     }
   }
 
@@ -307,7 +235,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Enter your assigned 4-digit PIN to begin',
+                  'Enter your 4–6 digit PIN, then tap ✓',
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
                   textAlign: TextAlign.center,
                 ),
@@ -348,8 +276,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 // ── PIN Indicator Dots ────────────────────────
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(4, (index) {
-                    final filled = _pin[index].isNotEmpty;
+                  // Always show at least the minimum number of boxes; grow
+                  // up to the maximum as longer PINs are typed.
+                  children: List.generate(
+                      _pin.length.clamp(AppConstants.minPinLength,
+                          AppConstants.maxPinLength), (index) {
+                    final filled = index < _pin.length;
                     return AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       margin: const EdgeInsets.symmetric(horizontal: 6),
@@ -368,7 +300,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         borderRadius: AppSpacing.borderMd,
                       ),
                       child: Center(
-                        child: _pin[index].isEmpty
+                        child: !filled
                             ? Text(
                                 '•',
                                 style: TextStyle(
@@ -409,7 +341,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     itemCount: 12,
                     itemBuilder: (context, index) {
-                      if (index == 9) return const SizedBox.shrink();
+                      if (index == 9) {
+                        return ElevatedButton(
+                          onPressed: _isLockedOut ? null : _onSubmit,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: AppSpacing.borderLg),
+                            elevation: 0,
+                          ),
+                          child: const Icon(Icons.check_rounded, size: 26),
+                        );
+                      }
                       if (index == 11) {
                         return OutlinedButton(
                           onPressed: _isLockedOut ? null : _onBackspace,

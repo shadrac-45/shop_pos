@@ -6,6 +6,10 @@
 /// 2. Initiate charge via local backend proxy
 /// 3. Waiting state with spinner (polling Paystack every 5s up to 90s)
 /// 4. Sale completion on success, retry/fallback options on fail/timeout
+///
+/// Every charge is recorded in [PendingMomoStore] until it resolves. After a
+/// timeout the same reference is re-checked rather than a new charge sent,
+/// so a late approval is still saved and the customer is never charged twice.
 /// ============================================
 library;
 
@@ -17,12 +21,16 @@ import 'package:uuid/uuid.dart';
 
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
-import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/features/sales/models/paystack_models.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/providers/cart_provider.dart';
 import 'package:shop_pos/features/sales/services/paystack_service.dart';
+import 'package:shop_pos/features/sales/services/pending_momo_store.dart';
+import 'package:shop_pos/features/sales/models/sale.dart';
+import 'package:shop_pos/features/sales/screens/sale_detail_screen.dart';
+import 'package:shop_pos/features/sales/services/sale_service.dart';
+import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 
 enum MomoFlowStep {
@@ -32,14 +40,27 @@ enum MomoFlowStep {
   success,
   failed,
   timeout,
+
+  /// Paystack confirmed payment but the sale couldn't be written locally.
+  saveFailed,
 }
 
 class MomoPaymentScreen extends ConsumerStatefulWidget {
+  /// Amount to charge by MoMo (the whole sale, or the MoMo part of a
+  /// split payment).
   final double totalAmount;
+
+  /// The rest of a split payment (cash, card…), saved with the sale.
+  final List<PaymentInput> otherPayments;
+
+  /// Cash handed over for the cash part of a split, if entered.
+  final double? amountTendered;
 
   const MomoPaymentScreen({
     super.key,
     required this.totalAmount,
+    this.otherPayments = const [],
+    this.amountTendered,
   });
 
   @override
@@ -56,6 +77,12 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
   String? _currentReference;
   String? _errorMessage;
   int _secondsRemaining = AppConstants.momoTimeoutSec;
+  bool _isCheckingAgain = false;
+  String? _saveError;
+
+  /// Captured when the charge is sent, so the sale is credited to the
+  /// cashier who took the payment.
+  int _cashierId = 0;
 
   Timer? _pollingTimer;
   Timer? _countdownTimer;
@@ -94,11 +121,25 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
 
     final reference = 'shoppos_${DateTime.now().millisecondsSinceEpoch}_${const Uuid().v4().substring(0, 8)}';
 
+    _cashierId = ref.read(currentUserProvider)?.id ?? 0;
+
     setState(() {
       _currentStep = MomoFlowStep.charging;
       _currentReference = reference;
       _errorMessage = null;
     });
+
+    // Record the charge before sending it, so it can be reconciled even if
+    // the app dies mid-request.
+    await PendingMomoStore.save(PendingMomoPayment(
+      reference: reference,
+      amountGhs: widget.totalAmount,
+      provider: _selectedProvider,
+      phone: normalisedPhone,
+      cashierId: _cashierId,
+      itemsJson: ref.read(cartProvider.notifier).itemsJson,
+      createdAt: DateTime.now(),
+    ));
 
     final paystackService = ref.read(paystackServiceProvider);
     final result = await paystackService.initiateCharge(
@@ -113,6 +154,12 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
     if (result.callSucceeded) {
       _startWaitingAndPolling(reference);
     } else {
+      // Drop the record only when the backend answered with a refusal. If
+      // it couldn't be reached, the charge may still have gone through.
+      if (result.errorMessage?.startsWith('Network error') != true) {
+        await PendingMomoStore.remove(reference);
+      }
+      if (!mounted) return;
       setState(() {
         _currentStep = MomoFlowStep.failed;
         _errorMessage = result.errorMessage ?? 'Failed to send payment request.';
@@ -135,7 +182,8 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
         _cancelTimers();
         setState(() {
           _currentStep = MomoFlowStep.timeout;
-          _errorMessage = 'Customer did not respond in time (90s timeout).';
+          _errorMessage =
+              'Customer did not respond in time (${AppConstants.momoTimeoutSec}s timeout).';
         });
       } else {
         setState(() => _secondsRemaining--);
@@ -167,6 +215,8 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
       case PaystackVerifyStatus.failed:
       case PaystackVerifyStatus.abandoned:
         _cancelTimers();
+        await PendingMomoStore.remove(reference);
+        if (!mounted) return;
         setState(() {
           _currentStep = MomoFlowStep.failed;
           _errorMessage = verifyResult.gatewayResponse ?? 'Payment was declined by customer or system.';
@@ -184,14 +234,33 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
 
   Future<void> _finalizeSaleSuccess(String reference) async {
     final cartNotifier = ref.read(cartProvider.notifier);
-    final currentUser = ref.read(currentUserProvider);
 
-    final success = await cartNotifier.completeSaleMomo(
-      paystackReference: reference,
-      provider: _selectedProvider,
-      phone: normaliseGhanaPhone(_phoneController.text.trim()) ?? _phoneController.text.trim(),
-      cashierId: currentUser?.id ?? 0,
-    );
+    Sale? sale;
+    try {
+      sale = await cartNotifier.completeSale(
+        payments: [
+          ...widget.otherPayments,
+          PaymentInput(AppConstants.paymentMomo, widget.totalAmount,
+              reference: reference),
+        ],
+        amountTendered: widget.amountTendered,
+        paystackReference: reference,
+        momoProvider: _selectedProvider,
+        momoPhone: normaliseGhanaPhone(_phoneController.text.trim()) ??
+            _phoneController.text.trim(),
+        cashierId: _cashierId,
+      );
+      _saveError = null;
+    } catch (e) {
+      _saveError = errorMessage(e);
+    }
+    final success = sale != null;
+
+    if (success) {
+      await PendingMomoStore.remove(reference);
+    } else {
+      await PendingMomoStore.setStatus(reference, PendingMomoStatus.paidNotSaved);
+    }
 
     if (!mounted) return;
 
@@ -199,19 +268,91 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
       ref.read(sessionManagerProvider).recordActivity();
       HapticFeedback.heavyImpact();
       setState(() => _currentStep = MomoFlowStep.success);
-      await Future.delayed(const Duration(seconds: 2));
-      if (mounted) {
-        if (ModalRoute.of(context)?.isCurrent == true) {
-          Navigator.of(context).pop(true);
-        }
-        context.showSuccessSnackbar('MoMo Sale completed successfully!');
+      await Future.delayed(const Duration(seconds: 1));
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).pushReplacement(MaterialPageRoute(
+          builder: (_) => SaleDetailScreen(saleId: sale!.id, justCompleted: true),
+        ));
       }
     } else {
-      setState(() {
-        _currentStep = MomoFlowStep.failed;
-        _errorMessage = 'Payment received, but failed to save sale to local database.';
-      });
+      HapticFeedback.vibrate();
+      setState(() => _currentStep = MomoFlowStep.saveFailed);
     }
+  }
+
+  // ── After a Timeout ───────────────────────────────────────────────────────
+
+  /// Re-checks the same reference once. A late approval is saved; a charge
+  /// that is still pending goes back to waiting on the same reference.
+  Future<void> _checkAgain() async {
+    final reference = _currentReference;
+    if (reference == null || _isCheckingAgain) return;
+
+    setState(() => _isCheckingAgain = true);
+    final verifyResult =
+        await ref.read(paystackServiceProvider).verifyStatus(reference);
+    if (!mounted) return;
+    setState(() => _isCheckingAgain = false);
+
+    switch (verifyResult.status) {
+      case PaystackVerifyStatus.success:
+        await _finalizeSaleSuccess(reference);
+      case PaystackVerifyStatus.failed:
+      case PaystackVerifyStatus.abandoned:
+        await PendingMomoStore.remove(reference);
+        if (!mounted) return;
+        setState(() {
+          _currentStep = MomoFlowStep.failed;
+          _errorMessage = verifyResult.gatewayResponse ??
+              'The customer did not approve the payment.';
+        });
+      case PaystackVerifyStatus.pending:
+      case PaystackVerifyStatus.networkError:
+        _startWaitingAndPolling(reference);
+    }
+  }
+
+  /// Leaving while a charge is unresolved risks the customer paying with
+  /// no sale recorded, so the cashier has to confirm it.
+  Future<void> _confirmLeaveUnresolved() async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave without a result?'),
+        content: Text(
+          'The customer may still approve this payment. If they do, the money '
+          'will arrive but no sale will be recorded here.\n\n'
+          'Only leave if the customer confirms they did not pay. The '
+          'reference ${_currentReference ?? ''} is kept for reconciliation.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep Checking'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) Navigator.of(context).pop(false);
+  }
+
+  /// Back navigation is only free when no charge is in flight.
+  bool get _canLeaveFreely => switch (_currentStep) {
+        MomoFlowStep.form || MomoFlowStep.failed || MomoFlowStep.success => true,
+        _ => false,
+      };
+
+  void _onBackPressed() {
+    if (_canLeaveFreely) {
+      Navigator.of(context).pop(false);
+    } else if (_currentStep == MomoFlowStep.timeout) {
+      _confirmLeaveUnresolved();
+    }
+    // charging / waiting / saveFailed: stay until resolved.
   }
 
   // ── Retry / Fallback ──────────────────────────────────────────────────────
@@ -228,29 +369,36 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(
-        title: const Text('Mobile Money Payment'),
-        backgroundColor: AppColors.cardBg,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: _currentStep == MomoFlowStep.waiting || _currentStep == MomoFlowStep.charging
-              ? null
-              : () => Navigator.of(context).pop(false),
+    return PopScope(
+      canPop: _canLeaveFreely,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _onBackPressed();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.scaffoldBg,
+        appBar: AppBar(
+          title: const Text('Mobile Money Payment'),
+          backgroundColor: AppColors.cardBg,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: _canLeaveFreely || _currentStep == MomoFlowStep.timeout
+                ? _onBackPressed
+                : null,
+          ),
         ),
-      ),
-      body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 300),
-          child: switch (_currentStep) {
-            MomoFlowStep.form => _buildFormStep(),
-            MomoFlowStep.charging => _buildChargingStep(),
-            MomoFlowStep.waiting => _buildWaitingStep(),
-            MomoFlowStep.success => _buildSuccessStep(),
-            MomoFlowStep.failed => _buildFailedStep(),
-            MomoFlowStep.timeout => _buildTimeoutStep(),
-          },
+        body: SafeArea(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: switch (_currentStep) {
+              MomoFlowStep.form => _buildFormStep(),
+              MomoFlowStep.charging => _buildChargingStep(),
+              MomoFlowStep.waiting => _buildWaitingStep(),
+              MomoFlowStep.success => _buildSuccessStep(),
+              MomoFlowStep.failed => _buildFailedStep(),
+              MomoFlowStep.timeout => _buildTimeoutStep(),
+              MomoFlowStep.saveFailed => _buildSaveFailedStep(),
+            },
+          ),
         ),
       ),
     );
@@ -597,7 +745,9 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
               child: Text(
-                'The customer did not respond to the mobile money prompt within 90 seconds.',
+                'No approval yet. The customer may still approve the prompt on '
+                'their phone, so check again before leaving. Checking does not '
+                'send a new request, so they cannot be charged twice.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
               ),
@@ -607,7 +757,7 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(false),
+                    onPressed: _isCheckingAgain ? null : _confirmLeaveUnresolved,
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       side: const BorderSide(color: AppColors.border),
@@ -624,7 +774,97 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _resetToForm,
+                    onPressed: _isCheckingAgain ? null : _checkAgain,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: AppColors.textOnPrimary,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: _isCheckingAgain
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text(
+                            'Check Again',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSaveFailedStep() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.report_problem_rounded, color: AppColors.warning, size: 80),
+            const SizedBox(height: 24),
+            const Text(
+              'Paid, but Sale Not Saved',
+              style: TextStyle(
+                  fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                'The customer has paid. Do not charge them again. Retry saving '
+                'the sale; if it keeps failing, write down the reference below. '
+                'It is also listed in Settings → Pending MoMo Payments.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+              ),
+            ),
+            if (_saveError != null) ...[
+              const SizedBox(height: 8),
+              Text(_saveError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+            ],
+            const SizedBox(height: 16),
+            SelectableText(
+              'Ref: ${_currentReference ?? ''}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 13, color: AppColors.textPrimary, fontFamily: 'monospace'),
+            ),
+            const SizedBox(height: 32),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    // The record stays in PendingMomoStore as paid-not-saved.
+                    onPressed: () => Navigator.of(context).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      side: const BorderSide(color: AppColors.border),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text(
+                      'Close',
+                      style: TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _currentReference == null
+                        ? null
+                        : () => _finalizeSaleSuccess(_currentReference!),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: AppColors.textOnPrimary,
@@ -632,7 +872,7 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: const Text(
-                      'Retry Prompt',
+                      'Retry Saving',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),

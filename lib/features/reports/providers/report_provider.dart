@@ -1,206 +1,49 @@
 /// ============================================
 /// Report Provider — ShopPOS
 /// ============================================
-/// Loads and aggregates sales data for the Owner's
-/// Reports dashboard. Provides:
-///  • Per-period sale lists (today / this week)
-///  • CashierSummary: per-staff revenue & transaction attribution
-///  • Product summary: ranked by quantity + revenue
-///  • Sample data generator for demo/testing
+/// The reporting period the owner/manager has
+/// picked, and the report for it.
 /// ============================================
 library;
 
-import 'dart:convert';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:isar/isar.dart';
-import 'package:shop_pos/features/auth/models/app_user.dart';
-import 'package:shop_pos/features/sales/models/sale.dart';
-import 'package:shop_pos/features/reports/services/report_aggregator.dart';
-import 'package:shop_pos/core/utils/date_helpers.dart';
+
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/features/reports/services/report_range.dart';
+import 'package:shop_pos/features/reports/services/report_service.dart';
 
-// ── Providers ────────────────────────────────────────────
-
-final reportProvider = StateNotifierProvider<ReportNotifier, List<Sale>>((ref) {
+final reportProvider =
+    StateNotifierProvider<ReportNotifier, AsyncValue<ReportSummary>>((ref) {
   return ReportNotifier(ref);
 });
 
-/// Active filter for the reports dashboard ('today' | 'week').
-final reportFilterProvider = StateProvider<String>((ref) => 'today');
-
-/// Re-export of the raw sale list for KPI widgets.
-final reportKpisProvider = Provider((ref) {
-  final sales = ref.watch(reportProvider);
-  return sales;
-});
-
-/// Ranked product summaries derived from the current reportProvider state.
-final productSummariesProvider = Provider<List<ProductSummary>>((ref) {
-  return ref.watch(reportProvider.notifier).productSummaries;
-});
-
-/// Top-selling products map (productName -> totalQty).
-final topProductsProvider = Provider<Map<String, int>>((ref) {
-  ref.watch(reportProvider);
-  return ref.read(reportProvider.notifier).topProducts;
-});
-
-/// Per-cashier summaries (async — resolves AppUser names from Isar).
-final cashierSummariesProvider =
-    FutureProvider<List<CashierSummary>>((ref) async {
-  final sales = ref.watch(reportProvider);
-  final isar = ref.read(isarProvider);
-  return ReportAggregator.buildCashierSummaries(isar, sales);
-});
-
-// ── ReportNotifier ────────────────────────────────────────
-
-class ReportNotifier extends StateNotifier<List<Sale>> {
+class ReportNotifier extends StateNotifier<AsyncValue<ReportSummary>> {
   final Ref ref;
-  String _currentFilter = 'today';
-  DateTime? _lastFetchTime;
+  ReportRange _range = ReportRange.of(ReportPeriod.today);
 
-  ReportNotifier(this.ref) : super([]) {
-    loadSalesForFilter('today', force: true);
+  ReportNotifier(this.ref) : super(const AsyncValue.loading()) {
+    refresh();
   }
 
-  String get currentFilter => _currentFilter;
+  ReportRange get range => _range;
 
-  /// Loads sales for the requested filter ('today' or 'week').
-  Future<void> loadSalesForFilter(String filter, {bool force = false}) async {
-    final now = DateTime.now();
+  Future<void> setRange(ReportRange range) {
+    _range = range;
+    return refresh();
+  }
 
-    if (!force &&
-        _currentFilter == filter &&
-        _lastFetchTime != null &&
-        now.difference(_lastFetchTime!).inSeconds < 10 &&
-        state.isNotEmpty) {
-      return;
+  /// Reloads the current period. Relative periods ("Today") are re-derived
+  /// so a report left open past midnight moves on to the new day.
+  Future<void> refresh() async {
+    if (_range.period != ReportPeriod.custom) {
+      _range = ReportRange.of(_range.period);
     }
-
-    _currentFilter = filter;
-    _lastFetchTime = now;
-
-    final isar = ref.read(isarProvider);
-    final DateTime startOfPeriod;
-    final endOfPeriod =
-        DateHelpers.startOfDay(now).add(const Duration(days: 1));
-
-    if (filter == 'week') {
-      startOfPeriod =
-          DateHelpers.startOfDay(now).subtract(const Duration(days: 7));
-    } else {
-      startOfPeriod = DateHelpers.startOfDay(now);
+    final range = _range;
+    try {
+      final summary = await ReportSummary.load(ref.read(isarProvider), range);
+      if (mounted && identical(range, _range)) state = AsyncValue.data(summary);
+    } catch (e, st) {
+      if (mounted) state = AsyncValue.error(e, st);
     }
-
-    final sales = await isar.sales
-        .filter()
-        .timestampBetween(startOfPeriod, endOfPeriod)
-        .sortByTimestampDesc()
-        .findAll();
-
-    state = sales;
-  }
-
-  Future<void> loadTodaySales({bool force = true}) =>
-      loadSalesForFilter('today', force: force);
-
-  // ── Computed getters ──────────────────────────────────
-
-  double get todayTotal => ReportAggregator.computeTotalRevenue(state);
-
-  Map<String, double> get todayBreakdown =>
-      ReportAggregator.computeBreakdown(state);
-
-  /// Ranked products by quantity sold (descending), with revenue.
-  List<ProductSummary> get productSummaries =>
-      ReportAggregator.computeProductSummaries(state);
-
-  /// Legacy getter — quantity only, used by existing providers.
-  Map<String, int> get topProducts {
-    return {for (final p in productSummaries) p.productName: p.totalQty};
-  }
-
-  // ── Sample data seeding ───────────────────────────────
-
-  /// Seeds realistic multi-cashier sample sales for demo & testing.
-  /// Looks up real AppUser IDs from Isar so cashier attribution works correctly.
-  Future<void> seedSampleSales() async {
-    final isar = ref.read(isarProvider);
-    final now = DateTime.now();
-
-    // Resolve real user IDs for seeding
-    final owner =
-        await isar.appUsers.filter().roleEqualTo('owner').findFirst();
-    final cashier =
-        await isar.appUsers.filter().roleEqualTo('cashier').findFirst();
-    final ownerId = owner?.id ?? 0;
-    final cashierId = cashier?.id ?? 0;
-
-    final sampleSales = [
-      // Owner — Cash
-      Sale()
-        ..timestamp = now.subtract(const Duration(minutes: 15))
-        ..cashierId = ownerId
-        ..totalAmount = 85.00
-        ..paymentType = 'cash'
-        ..itemsJson = jsonEncode([
-          {'productId': 1, 'productName': 'Milk (1L)', 'quantity': 2, 'price': 25.00},
-          {'productId': 2, 'productName': 'Bread (Loaf)', 'quantity': 1, 'price': 35.00},
-        ])
-        ..isSynced = false,
-      // Owner — MoMo (with phone number)
-      Sale()
-        ..timestamp = now.subtract(const Duration(hours: 1, minutes: 20))
-        ..cashierId = ownerId
-        ..totalAmount = 140.00
-        ..paymentType = 'momo'
-        ..itemsJson = jsonEncode([
-          {'productId': 3, 'productName': 'Rice (5kg Bag)', 'quantity': 1, 'price': 140.00},
-        ])
-        ..momoProvider = 'mtn'
-        ..momoPhone = '+233551234567'
-        ..isSynced = false,
-      // Cashier — Cash
-      Sale()
-        ..timestamp = now.subtract(const Duration(hours: 3, minutes: 45))
-        ..cashierId = cashierId
-        ..totalAmount = 60.00
-        ..paymentType = 'cash'
-        ..itemsJson = jsonEncode([
-          {'productId': 1, 'productName': 'Milk (1L)', 'quantity': 1, 'price': 25.00},
-          {'productId': 4, 'productName': 'Sugar (1kg)', 'quantity': 2, 'price': 17.50},
-        ])
-        ..isSynced = false,
-      // Cashier — MoMo (with phone number)
-      Sale()
-        ..timestamp = now.subtract(const Duration(hours: 5, minutes: 10))
-        ..cashierId = cashierId
-        ..totalAmount = 210.00
-        ..paymentType = 'momo'
-        ..itemsJson = jsonEncode([
-          {'productId': 5, 'productName': 'Cooking Oil (2L)', 'quantity': 2, 'price': 105.00},
-        ])
-        ..momoProvider = 'vod'
-        ..momoPhone = '+233209876543'
-        ..isSynced = false,
-      // Cashier — Cash
-      Sale()
-        ..timestamp = now.subtract(const Duration(hours: 7))
-        ..cashierId = cashierId
-        ..totalAmount = 45.00
-        ..paymentType = 'cash'
-        ..itemsJson = jsonEncode([
-          {'productId': 2, 'productName': 'Bread (Loaf)', 'quantity': 1, 'price': 35.00},
-          {'productId': 6, 'productName': 'Eggs (crate)', 'quantity': 1, 'price': 10.00},
-        ])
-        ..isSynced = false,
-    ];
-
-    await isar.writeTxn(() async {
-      await isar.sales.putAll(sampleSales);
-    });
-
-    await loadSalesForFilter('today', force: true);
   }
 }

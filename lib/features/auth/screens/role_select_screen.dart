@@ -71,8 +71,8 @@ class RoleSelectScreen extends StatelessWidget {
                   // ── Cashier Tile ──────────────────────────
                   _RoleTile(
                     icon: Icons.point_of_sale_rounded,
-                    title: 'Cashier',
-                    subtitle: '4-digit PIN',
+                    title: 'Staff',
+                    subtitle: '4–6 digit PIN',
                     color: const Color(0xFF2563EB),
                     onTap: () => Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => const LoginScreen(),

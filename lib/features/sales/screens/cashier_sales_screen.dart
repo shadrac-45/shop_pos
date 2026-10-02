@@ -10,11 +10,16 @@
 /// ============================================
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
+import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/shifts/providers/shift_provider.dart';
+import 'package:shop_pos/features/shifts/screens/shift_screen.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
@@ -60,10 +65,14 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
         context.showErrorSnackbar('"${product.name}" is out of stock!');
         break;
       case AddItemResult.expired:
-        context.showErrorSnackbar('"${product.name}" is expired!');
+        context.showErrorSnackbar(
+            'All "${product.name}" in stock has expired and cannot be sold.');
         break;
       case AddItemResult.notFound:
         context.showErrorSnackbar('Product not found!');
+        break;
+      case AddItemResult.archived:
+        context.showErrorSnackbar('"${product.name}" has been archived.');
         break;
     }
   }
@@ -77,14 +86,15 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
     if (scannedCode == null || scannedCode.isEmpty || !mounted) return;
     final normalizedCode = scannedCode.trim().toLowerCase();
 
+    // Barcode, then SKU, then exact name: the first that matches wins.
     Product? matchedProduct;
-    for (final p in products) {
-      if (p.name.toLowerCase() == normalizedCode ||
-          p.id.toString() == normalizedCode ||
-          p.category.toLowerCase() == normalizedCode) {
-        matchedProduct = p;
-        break;
-      }
+    for (final match in <bool Function(Product)>[
+      (p) => p.barcode?.trim().toLowerCase() == normalizedCode,
+      (p) => p.sku?.trim().toLowerCase() == normalizedCode,
+      (p) => p.name.toLowerCase() == normalizedCode,
+    ]) {
+      matchedProduct = products.where((p) => !p.isArchived).where(match).firstOrNull;
+      if (matchedProduct != null) break;
     }
 
     if (matchedProduct != null) {
@@ -106,6 +116,7 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
     return SafeArea(
       child: Column(
         children: [
+          const _ShiftBanner(),
           // ── Search & Scan Bar ─────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
@@ -173,9 +184,10 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
           Expanded(
             child: productsAsync.when(
               data: (products) {
+                final sellable = products.where((p) => !p.isArchived);
                 final filteredProducts = _searchQuery.isEmpty
-                    ? products
-                    : products
+                    ? sellable.toList()
+                    : sellable
                         .where((p) =>
                             p.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
                             p.category.toLowerCase().contains(_searchQuery.toLowerCase()))
@@ -187,14 +199,20 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
                     title: _searchQuery.isNotEmpty ? 'No Products Found' : 'Catalog is Empty',
                     description: _searchQuery.isNotEmpty
                         ? 'No item matching "$_searchQuery". Try clearing your search.'
-                        : 'Your product catalog is empty. Load sample products to begin selling.',
-                    actionLabel: _searchQuery.isNotEmpty ? 'Clear Search' : 'Load Sample Products',
+                        : 'There are no products to sell yet. Ask the owner or a '
+                            'manager to add products.',
+                    actionLabel: _searchQuery.isNotEmpty
+                        ? 'Clear Search'
+                        : (kDebugMode ? 'Load Sample Products (debug)' : null),
                     onAction: _searchQuery.isNotEmpty
                         ? () {
                             _searchController.clear();
                             setState(() => _searchQuery = '');
                           }
-                        : () async {
+                        // Demo data never reaches a real shop's database.
+                        : !kDebugMode
+                            ? null
+                            : () async {
                             HapticFeedback.mediumImpact();
                             final isar = ref.read(isarProvider);
                             final count = await CsvImportService.seedSampleProducts(isar);
@@ -224,7 +242,9 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
                       itemCount: filteredProducts.length,
                       itemBuilder: (context, index) {
                         final product = filteredProducts[index];
-                        final isOutOfStock = product.totalStock <= 0;
+                        final sellableStock = product.sellableStock;
+                        final isOutOfStock = sellableStock <= 0;
+                        final onlyExpired = isOutOfStock && product.totalStock > 0;
                         final tileBg = Color(product.quickButtonColor);
 
                         return TouchableCard(
@@ -265,7 +285,11 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
                                     borderRadius: AppSpacing.borderSm,
                                   ),
                                   child: Text(
-                                    isOutOfStock ? 'OUT OF STOCK' : 'Stock: ${product.totalStock.toInt()}',
+                                    onlyExpired
+                                        ? 'EXPIRED'
+                                        : isOutOfStock
+                                            ? 'OUT OF STOCK'
+                                            : 'Stock: $sellableStock',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 10,
@@ -389,6 +413,43 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Reminds staff who run a till to open a shift before selling.
+class _ShiftBanner extends ConsumerWidget {
+  const _ShiftBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(currentUserProvider);
+    if (!Permissions.can(user, Permission.runShift)) return const SizedBox.shrink();
+    final shift = ref.watch(currentShiftProvider);
+    if (shift.isLoading || shift.valueOrNull != null) return const SizedBox.shrink();
+
+    return Material(
+      color: AppColors.warning.withValues(alpha: 0.12),
+      child: InkWell(
+        onTap: () => Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const ShiftScreen())),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+          child: Row(
+            children: [
+              Icon(Icons.lock_clock_rounded, color: AppColors.warning, size: 20),
+              SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  'No shift open — tap to count your float and open a shift.',
+                  style: TextStyle(color: AppColors.warningDarkText, fontWeight: FontWeight.w600),
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: AppColors.warning),
+            ],
+          ),
+        ),
       ),
     );
   }
