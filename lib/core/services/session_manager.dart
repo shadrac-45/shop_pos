@@ -55,6 +55,9 @@ class SessionManager {
   void recordActivity() {
     // Taps on the login screens must not start a timer for nobody.
     if (_sessionStartTime == null) return;
+    // A reset password/PIN or a deactivation ends the session at once.
+    ref.read(currentUserProvider.notifier).checkSessionStillValid();
+    if (_sessionStartTime == null) return;
     _lastActivityTime = DateTime.now();
     _resetInactivityTimer();
   }

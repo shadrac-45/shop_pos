@@ -11,7 +11,10 @@
 /// ============================================
 library;
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:shop_pos/features/products/services/product_image_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -573,11 +576,14 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                 Container(
                   width: 44,
                   height: 44,
+                  clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: Color(product.quickButtonColor),
                     borderRadius: AppSpacing.borderMd,
                   ),
-                  child: Center(
+                  child: ProductImageService.exists(product.imagePath)
+                      ? Image.file(File(product.imagePath!), fit: BoxFit.cover)
+                      : Center(
                     child: Text(
                       _avatarInitial(product.name),
                       style: const TextStyle(

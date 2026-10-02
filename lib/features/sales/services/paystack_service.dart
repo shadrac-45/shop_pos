@@ -12,6 +12,7 @@
 library;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/providers/store_settings_provider.dart';
@@ -37,8 +38,12 @@ class PaystackService implements PaymentGateway {
   /// [baseUrl] is '' when no backend is configured; charges then fail
   /// with a clear message instead of trying an unreachable address.
   /// [apiKey] is sent as `x-api-key` when the backend requires one.
-  PaystackService({required String baseUrl, String apiKey = ''})
-      : _baseUrl = baseUrl {
+  /// [httpAdapter] replaces the network layer (tests only).
+  PaystackService({
+    required String baseUrl,
+    String apiKey = '',
+    @visibleForTesting HttpClientAdapter? httpAdapter,
+  }) : _baseUrl = baseUrl {
     _dio = Dio(
       BaseOptions(
         baseUrl: _baseUrl,
@@ -51,6 +56,7 @@ class PaystackService implements PaymentGateway {
         },
       ),
     );
+    if (httpAdapter != null) _dio.httpClientAdapter = httpAdapter;
   }
 
   String get baseUrl => _baseUrl;
@@ -100,9 +106,10 @@ class PaystackService implements PaymentGateway {
     required double amountGhs,
     required String provider,
     required String reference,
+    String? email,
   }) async {
     if (!isConfigured) {
-      return PaystackChargeResult.error(notConfiguredMessage);
+      return PaystackChargeResult.error(notConfiguredMessage, code: 'not_configured');
     }
 
     // Paystack amounts are always in the smallest currency unit (pesewas).
@@ -116,23 +123,39 @@ class PaystackService implements PaymentGateway {
           'amount_pesewas': amountPesewas,
           'provider': provider,
           'reference': reference,
+          if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
         },
       );
 
       final body = response.data;
       if (body == null) {
-        return PaystackChargeResult.error('Empty response from backend.');
+        return PaystackChargeResult.error('Empty response from backend.', outcomeUnknown: true);
       }
       return PaystackChargeResult.fromJson(body);
     } on DioException catch (e) {
-      final serverMessage = e.response?.data is Map
-          ? (e.response?.data as Map)['message'] as String? ?? e.message
-          : e.message;
+      final response = e.response;
+      if (response == null) {
+        // No reply: the request may or may not have reached Paystack.
+        return PaystackChargeResult.error(
+          'Could not reach the payment server. Check the internet connection.',
+          code: 'network_error',
+          outcomeUnknown: true,
+        );
+      }
+      final data = response.data is Map ? response.data as Map : const {};
+      final code = data['error'] as String?;
       return PaystackChargeResult.error(
-        'Network error: ${serverMessage ?? 'Could not reach payment server'}',
+        switch (response.statusCode) {
+          401 => 'The payment server rejected this till\'s API key. Ask the owner to check '
+              'Settings → Integrations.',
+          _ => data['message'] as String? ?? 'The payment request failed (HTTP ${response.statusCode}).',
+        },
+        code: code,
+        // Paystack unreachable / erroring: the charge may still exist.
+        outcomeUnknown: code == 'paystack_unreachable' || code == 'paystack_error',
       );
     } catch (e) {
-      return PaystackChargeResult.error('Unexpected error: $e');
+      return PaystackChargeResult.error('Unexpected error: $e', outcomeUnknown: true);
     }
   }
 
@@ -147,13 +170,19 @@ class PaystackService implements PaymentGateway {
   Future<PaystackVerifyResult> verifyStatus(String reference) async {
     if (!isConfigured) return PaystackVerifyResult.networkError();
     try {
-      final response = await _dio.get<Map<String, dynamic>>(
-        '/momo/verify/$reference',
+      final response = await _dio.get<Object>(
+        '/momo/verify/${Uri.encodeComponent(reference)}',
+        // Read error replies too: a 404 "not found" or 401 is an answer,
+        // not a network failure.
+        options: Options(validateStatus: (_) => true),
       );
 
+      final status = response.statusCode ?? 0;
       final body = response.data;
-      if (body == null) return PaystackVerifyResult.networkError();
-      return PaystackVerifyResult.fromJson(body);
+      if (status == 200 && body is Map) {
+        return PaystackVerifyResult.fromJson(Map<String, dynamic>.from(body));
+      }
+      return PaystackVerifyResult.fromError(status, body);
     } on DioException catch (_) {
       return PaystackVerifyResult.networkError();
     } catch (_) {

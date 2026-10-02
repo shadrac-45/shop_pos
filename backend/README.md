@@ -24,7 +24,23 @@ npm start
 | `PORT` | Port to listen on (default `3000`) |
 | `PAYSTACK_SECRET_KEY` | Enables Mobile Money. Use `sk_test_…` while testing. |
 | `API_KEY` | Shared secret the app sends as `x-api-key`. Required for sync, and it also protects the MoMo routes. |
-| `DATA_DIR` | Folder for synced data (`shoppos-sync.json`). Back it up. |
+| `SHOPS_FILE` | Host several shops instead (replaces the two settings above; see below) |
+| `DATA_DIR` | Folder for synced data. Back it up. |
+
+### Several shops on one server
+
+Point `SHOPS_FILE` at a JSON file:
+
+```json
+[
+  { "id": "kofi-corner", "apiKey": "at-least-16-random-chars", "paystackSecretKey": "sk_live_..." },
+  { "id": "ama-provisions", "apiKey": "another-long-random-key" }
+]
+```
+
+Each shop's devices use that shop's `apiKey`. A shop only ever sees its own data (stored under
+`DATA_DIR/<id>/`) and charges MoMo to its own Paystack account. A shop without
+`paystackSecretKey` gets sync but no MoMo.
 
 Then in the app, as the owner: **Settings → Integrations**. Enter the URL ending in `/api`
 (for example `https://pos.example.com/api`) and the same `API_KEY`, then tap **Save & Test**.
@@ -41,11 +57,12 @@ builds use that address when no URL is saved.
 | `POST /api/momo/charge` | `{phone, amount_pesewas, provider: mtn\|vod\|atl, reference}` | `{success, reference, status, message}` |
 | `GET /api/momo/verify/:reference` | | `{status: success\|failed\|abandoned\|pending, gateway_response, amount}` |
 | `POST /api/sync/push` | `{collections: {sales: [...], ...}}`, header `x-device-id` | `{success, stored, serverTime}` |
-| `GET /api/sync/pull?since=ISO` | header `x-device-id` | `{success, serverTime, products: [...]}` |
+| `GET /api/sync/pull?since=ISO` | header `x-device-id` | `{success, serverTime, products, users, batches, sales, saleItems, stockMovements, expenses}` from the shop's other devices |
 
 Records are keyed by `uuid`. When two devices edit the same record, the one with the later
-`updatedAt` wins. Stock levels are not merged between devices: each device's stock comes from its own
-sales and restocks.
+`updatedAt` wins. Stock is shared through stock movements: each device applies every other device's
+movements to its batches exactly once, so all tills agree on stock levels. Shifts and activity logs
+are uploaded for safekeeping but not sent to other devices.
 
 ## Tests
 
@@ -55,6 +72,5 @@ npm test
 
 ## Limits
 
-- Storage is a single JSON file, which is fine for one shop. For many shops on one server, swap
-  `src/store.js` for a real database.
-- One `API_KEY` per server. Give each shop its own server or key.
+- Storage is one JSON file per shop, which is fine for a small shop's volume. For heavy use or many
+  shops, swap `src/store.js` for a real database.

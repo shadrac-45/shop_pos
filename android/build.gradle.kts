@@ -40,6 +40,23 @@ subprojects {
             } catch (e: Exception) {
                 // Ignore reflection or resolution errors
             }
+
+            // Old plugins (isar_flutter_libs compiles against SDK 30) fail
+            // release resource linking against newer AndroidX libraries
+            // ("resource android:attr/lStar not found"), so raise any plugin
+            // below SDK 35 to 35.
+            try {
+                val current = androidExt.javaClass.getMethod("getCompileSdkVersion")
+                    .invoke(androidExt) as? String
+                val level = current?.removePrefix("android-")?.toIntOrNull()
+                if (level != null && level < 35) {
+                    androidExt.javaClass
+                        .getMethod("compileSdkVersion", Int::class.javaPrimitiveType)
+                        .invoke(androidExt, 35)
+                }
+            } catch (e: Exception) {
+                // Not an Android library module.
+            }
         }
     }
 

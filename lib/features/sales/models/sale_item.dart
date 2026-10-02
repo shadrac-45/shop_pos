@@ -15,6 +15,10 @@ part 'sale_item.g.dart';
 class SaleItem {
   Id id = Isar.autoIncrement;
 
+  /// Stable ID used for sync and backups.
+  @Index()
+  String? uuid;
+
   @Index()
   late int saleId;
 

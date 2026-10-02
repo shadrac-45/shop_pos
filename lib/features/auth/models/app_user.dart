@@ -30,10 +30,14 @@ class AppUser {
   @Index()
   String? email;
 
-  /// BCrypt-style password hash for admin email+password login.
-  /// Uses HashHelpers.hashPassword() (SHA-256 with domain salt).
+  /// bcrypt hash of the admin password (see HashHelpers.hashPassword).
   /// Null for cashier / staff accounts that use PIN only.
   String? passwordHash;
+
+  /// Bumped whenever this account's password or PIN is reset or changed.
+  /// A session started under an older version is ended (see
+  /// AuthNotifier.checkSessionStillValid).
+  int credentialVersion = 0;
 
   /// Whether this account is active. Owners can deactivate cashier accounts
   /// without deleting them (preserving sales history references).

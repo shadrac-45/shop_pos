@@ -16,8 +16,9 @@ budget Android phones. Mobile Money (Paystack) and cloud sync work through a sma
 - **Payments**: cash, Mobile Money (Paystack), card and QR (recorded after the card machine or QR
   app takes the payment). Each method can be turned on or off. Payments can be split across methods.
 - **Cash received and change due**, with quick note buttons
-- **Receipts** after every sale and from history: print through the Android print dialog (Wi-Fi
-  and many Bluetooth printers) or share as PDF (WhatsApp, email, SMS apps)
+- **Receipts** after every sale and from history: print on a paired **Bluetooth ESC/POS thermal
+  printer** (58 or 80 mm), or through the Android print dialog, or share as PDF (WhatsApp, email,
+  SMS apps). A **cash drawer** plugged into the printer opens on cash sales.
 - **Void** a whole sale or **refund** chosen items, by cash or the original method. Items go back
   to the batches they came from, or are left out of stock if damaged.
 - MoMo safety: a timed-out charge is re-checked instead of charged again. Every charge is tracked
@@ -32,6 +33,7 @@ budget Android phones. Mobile Money (Paystack) and cloud sync work through a sma
   daily notification for expiring and low-stock products
 - Archive or restore products (past sales are kept)
 - Cost price, barcode and SKU on every product (unique barcodes and SKUs). CSV and Excel import.
+- **Product photos** from the camera or gallery, shown on the till buttons
 
 ### People and security
 - Roles enforced in the services, not just hidden in the UI:
@@ -62,8 +64,15 @@ budget Android phones. Mobile Money (Paystack) and cloud sync work through a sma
 ### Data
 - Everything is stored on the phone in Isar and works with no network
 - **Backup and restore** of the whole database to one file
-- **Cloud sync** every 10 minutes to the ShopPOS backend: sales, stock movements, expenses, shifts,
-  products and staff go up, and product and price changes from other devices come down
+- **Several tills, one shop**: every 10 minutes each device syncs with the ShopPOS backend. Stock
+  movements are applied once on every device, so stock levels agree. Sales, refunds, expenses,
+  products, prices and staff names are shared, so any device's reports cover the whole shop.
+  Shifts and cash-ups stay per till.
+- To add a second till, restore a backup from the first one, or start it empty and sync. Either way
+  it rebuilds the stock from the movement history. Staff from other tills need a PIN set on each
+  new device, because PINs are never synced.
+- **Several shops, one server**: the backend can host many shops, each with its own key, Paystack
+  account and data (see `backend/README.md`).
 
 ## Getting started
 
@@ -120,13 +129,12 @@ Business rules live in services (`SaleService`, `InventoryService`, `ShiftServic
 `ExpenseService`, `ReportSummary`, `BackupService`, `SyncService`). Each one checks permissions and
 writes in a single transaction. Screens call services and never write to the database directly.
 
-## Not built yet
+## Known limits
 
-- Direct ESC/POS Bluetooth printing and cash-drawer kick. Receipts print through the Android print
-  dialog instead, and the cash-drawer setting is stored but unused.
-- Merging stock levels between several devices. Sync shares sales and catalog changes, and each
-  device's stock comes from its own sales and restocks.
-- Product images and multi-shop accounts on one backend
+- Product photos stay on the device that took them: they aren't synced or included in backups.
+- If two tills sell the last unit at the same moment while offline, both sales go through and stock
+  can show below zero after syncing. The movement history shows exactly what happened.
+- Receipts print in plain ASCII, so the currency shows as its code (GHS) rather than the symbol.
 
 ## License
 

@@ -30,10 +30,11 @@ final syncProvider = StateNotifierProvider<SyncController, SyncState>((ref) {
   return SyncController(ref);
 });
 
-/// Whether the store has entered what sync needs.
+/// Whether a sync server has been set up. Sync never uses the payment
+/// server.
 final syncConfiguredProvider = Provider<bool>((ref) {
   final s = ref.watch(storeSettingsProvider);
-  return s.backendUrl.trim().isNotEmpty && s.syncApiKey.trim().isNotEmpty;
+  return s.syncServerUrl.trim().isNotEmpty && s.syncServerKey.trim().isNotEmpty;
 });
 
 class SyncController extends StateNotifier<SyncState> {
@@ -49,6 +50,11 @@ class SyncController extends StateNotifier<SyncState> {
         syncNow(quiet: true);
       }
     }, fireImmediately: true);
+
+    // Clear an old error when sync is switched off or reconfigured.
+    ref.listen(syncConfiguredProvider, (_, __) {
+      if (!state.running) state = const SyncState();
+    });
   }
 
   /// Runs a sync unless one is already running or sync isn't set up.
@@ -61,7 +67,7 @@ class SyncController extends StateNotifier<SyncState> {
     final isar = ref.read(isarProvider);
     final result = await SyncService.syncNow(
       isar,
-      baseUrl: ref.read(backendUrlProvider),
+      baseUrl: ref.read(storeSettingsProvider).syncServerUrl.trim(),
     );
     if (!mounted) return result;
     state = SyncState(last: result);

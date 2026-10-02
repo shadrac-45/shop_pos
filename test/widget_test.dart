@@ -28,14 +28,27 @@ void main() {
   });
 
   group('HashHelpers Tests', () {
-    test('SHA-256 PIN hashing is deterministic and salted', () {
+    test('PINs are hashed with bcrypt and a fresh salt each time', () {
       final hash1 = HashHelpers.hashPin('1234');
       final hash2 = HashHelpers.hashPin('1234');
-      final hashDiff = HashHelpers.hashPin('0000');
 
-      expect(hash1, equals(hash2));
-      expect(hash1, isNot(equals(hashDiff)));
-      expect(hash1.length, 64); // Hex SHA-256 length
+      expect(hash1, startsWith(r'$2a$'));
+      expect(hash1, isNot(equals(hash2))); // different salts
+      expect(HashHelpers.verifyPin('1234', hash1), isTrue);
+      expect(HashHelpers.verifyPin('1234', hash2), isTrue);
+      expect(hash1, isNot(contains('1234')));
+    });
+
+    test('hashes from older versions still verify and are flagged for upgrade', () {
+      final legacyPin = HashHelpers.legacyPinHashForTest('5566');
+      expect(HashHelpers.verifyPin('5566', legacyPin), isTrue);
+      expect(HashHelpers.verifyPin('5567', legacyPin), isFalse);
+      expect(HashHelpers.needsRehash(legacyPin), isTrue);
+      expect(HashHelpers.needsRehash(HashHelpers.hashPin('5566')), isFalse);
+
+      final legacyPassword = HashHelpers.legacyPasswordHashForTest('OldPass123');
+      expect(HashHelpers.verifyPassword('OldPass123', legacyPassword), isTrue);
+      expect(HashHelpers.verifyPassword('oldpass123', legacyPassword), isFalse);
     });
 
     test('verifyPin correctly matches hashed PIN and rejects raw string', () {

@@ -148,6 +148,11 @@ class _AddProductDialogState
       ),
 
       const SizedBox(height: 14),
+      buildLabel('Photo (optional)'),
+      const SizedBox(height: 6),
+      buildImagePicker(),
+
+      const SizedBox(height: 14),
       ...buildInventoryFields(),
 
       const SizedBox(height: 20),
@@ -275,6 +280,7 @@ class _AddProductDialogState
           barcode: barcodeController.text,
           sku: skuController.text,
           reorderLevel: reorderValue,
+          imagePath: imagePath,
         ),
         initialQuantity: int.tryParse(_qtyController.text.trim()) ?? 0,
         expiryDate: _selectedExpiry,

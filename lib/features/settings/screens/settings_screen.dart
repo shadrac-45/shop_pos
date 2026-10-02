@@ -33,6 +33,7 @@ import 'package:shop_pos/features/settings/screens/developer_debug_screen.dart';
 import 'package:shop_pos/features/settings/screens/integrations_screen.dart';
 import 'package:shop_pos/features/settings/screens/manage_staff_screen.dart';
 import 'package:shop_pos/features/settings/screens/pending_momo_screen.dart';
+import 'package:shop_pos/features/settings/screens/printer_setup_screen.dart';
 import 'package:shop_pos/features/settings/screens/store_settings_screen.dart';
 import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
@@ -325,6 +326,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Store Settings',
                 subtitle: 'Profile, currency, VAT, receipts, payment methods, hardware',
                 onTap: () => _open(const StoreSettingsScreen()),
+              ),
+              _tile(
+                icon: Icons.print_rounded,
+                title: 'Receipt Printer',
+                subtitle: store.printerName.isEmpty
+                    ? 'Set up a Bluetooth printer and cash drawer'
+                    : store.printerName,
+                onTap: () => _open(const PrinterSetupScreen()),
               ),
               _tile(
                 icon: Icons.cloud_sync_rounded,

@@ -20,6 +20,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/features/sales/models/paystack_models.dart';
@@ -70,6 +71,10 @@ class MomoPaymentScreen extends ConsumerStatefulWidget {
 class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+
+  /// Why the latest status check didn't get an answer (shown while waiting).
+  String? _pollIssue;
 
   String _selectedProvider = AppConstants.momoProviderMtn;
   MomoFlowStep _currentStep = MomoFlowStep.form;
@@ -89,14 +94,15 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
 
   static const _providers = [
     (code: AppConstants.momoProviderMtn, name: 'MTN Mobile Money', color: Color(0xFFFFCC00), icon: Icons.phone_android_rounded),
-    (code: AppConstants.momoProviderVodafone, name: 'Vodafone Cash', color: Color(0xFFE60000), icon: Icons.phone_iphone_rounded),
-    (code: AppConstants.momoProviderAirtelTigo, name: 'AirtelTigo Money', color: Color(0xFF003399), icon: Icons.cell_tower_rounded),
+    (code: AppConstants.momoProviderVodafone, name: 'Telecel Cash (Vodafone)', color: Color(0xFFE60000), icon: Icons.phone_iphone_rounded),
+    (code: AppConstants.momoProviderAirtelTigo, name: 'AT Money (AirtelTigo)', color: Color(0xFF003399), icon: Icons.cell_tower_rounded),
   ];
 
   @override
   void dispose() {
     _cancelTimers();
     _phoneController.dispose();
+    _emailController.dispose();
     super.dispose();
   }
 
@@ -139,6 +145,14 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
       cashierId: _cashierId,
       itemsJson: ref.read(cartProvider.notifier).itemsJson,
       createdAt: DateTime.now(),
+      otherPayments: [
+        for (final p in widget.otherPayments)
+          {'method': p.method, 'amount': p.amount, 'reference': p.reference},
+      ],
+      amountTendered: widget.amountTendered,
+      saleDiscount: ref.read(cartSaleDiscountProvider),
+      taxRate: ref.read(taxConfigProvider).rate,
+      pricesIncludeTax: ref.read(taxConfigProvider).pricesIncludeTax,
     ));
 
     final paystackService = ref.read(paystackServiceProvider);
@@ -147,23 +161,111 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
       amountGhs: widget.totalAmount,
       provider: _selectedProvider,
       reference: reference,
+      email: _emailController.text.trim(),
     );
 
     if (!mounted) return;
 
     if (result.callSucceeded) {
       _startWaitingAndPolling(reference);
+    } else if (result.outcomeUnknown) {
+      // We can't tell whether Paystack got the request: the customer may
+      // still be prompted, so keep checking this reference instead of
+      // offering a new charge.
+      _startWaitingAndPolling(reference);
+      setState(() => _pollIssue = result.errorMessage);
     } else {
-      // Drop the record only when the backend answered with a refusal. If
-      // it couldn't be reached, the charge may still have gone through.
-      if (result.errorMessage?.startsWith('Network error') != true) {
-        await PendingMomoStore.remove(reference);
-      }
+      // The server refused the request outright: nothing was charged.
+      await PendingMomoStore.remove(reference);
       if (!mounted) return;
       setState(() {
         _currentStep = MomoFlowStep.failed;
         _errorMessage = result.errorMessage ?? 'Failed to send payment request.';
       });
+    }
+  }
+
+  /// Amount this screen asked Paystack to charge, in pesewas.
+  int get _expectedPesewas => (widget.totalAmount * 100).round();
+
+  /// Acts on a status check. Returns true if checking should continue.
+  Future<bool> _handleVerifyResult(String reference, PaystackVerifyResult result) async {
+    var status = result.status;
+
+    // Double-check the confirmed amount on this side too: a success for a
+    // different amount or currency is never recorded as this sale.
+    if (status == PaystackVerifyStatus.success &&
+        ((result.amountPesewas != null && result.amountPesewas != _expectedPesewas) ||
+            (result.currency != null && result.currency != 'GHS'))) {
+      status = PaystackVerifyStatus.amountMismatch;
+    }
+
+    switch (status) {
+      case PaystackVerifyStatus.success:
+        _cancelTimers();
+        await _finalizeSaleSuccess(reference);
+        return false;
+
+      case PaystackVerifyStatus.failed:
+      case PaystackVerifyStatus.abandoned:
+      case PaystackVerifyStatus.notFound:
+      case PaystackVerifyStatus.invalidReference:
+        // Final: nothing was (or ever will be) paid for this reference.
+        _cancelTimers();
+        await PendingMomoStore.remove(reference);
+        if (!mounted) return false;
+        setState(() {
+          _currentStep = MomoFlowStep.failed;
+          _errorMessage = switch (status) {
+            PaystackVerifyStatus.notFound =>
+              'Paystack has no record of this payment, so the customer was not charged.',
+            PaystackVerifyStatus.invalidReference =>
+              'The payment reference was rejected. The customer was not charged.',
+            PaystackVerifyStatus.abandoned => 'The payment was not completed.',
+            _ => result.gatewayResponse ?? 'The payment was declined.',
+          };
+        });
+        return false;
+
+      case PaystackVerifyStatus.amountMismatch:
+        // Money may have moved, but not the right amount: keep the record
+        // for the owner to reconcile; never record the sale automatically.
+        _cancelTimers();
+        if (!mounted) return false;
+        setState(() {
+          _currentStep = MomoFlowStep.failed;
+          _errorMessage = 'Paystack reports a payment of a different amount '
+              '(${result.amountPesewas == null ? 'unknown' : CurrencyHelpers.format(result.amountPesewas! / 100)}). '
+              'The sale was NOT recorded. Check the Paystack dashboard for reference $reference '
+              'before trying again; it is kept under Settings → Pending MoMo Payments.';
+        });
+        return false;
+
+      case PaystackVerifyStatus.unauthorized:
+        // A setup problem, not a payment result: the customer may still
+        // approve, so the pending record stays for later checking.
+        _cancelTimers();
+        if (!mounted) return false;
+        setState(() {
+          _currentStep = MomoFlowStep.failed;
+          _errorMessage = 'The payment server rejected this till\'s API key, so the payment '
+              'can\'t be checked. Ask the owner to fix Settings → Integrations, then check it '
+              'under Settings → Pending MoMo Payments.';
+        });
+        return false;
+
+      case PaystackVerifyStatus.pending:
+      case PaystackVerifyStatus.networkError:
+      case PaystackVerifyStatus.gatewayError:
+        if (mounted) {
+          setState(() => _pollIssue = switch (status) {
+                PaystackVerifyStatus.networkError => 'No connection to the payment server. Still trying…',
+                PaystackVerifyStatus.gatewayError =>
+                  '${result.message ?? 'Paystack is not responding'}. Still trying…',
+                _ => null,
+              });
+        }
+        return true;
     }
   }
 
@@ -205,29 +307,7 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
     final verifyResult = await paystackService.verifyStatus(reference);
 
     if (!mounted || _currentStep != MomoFlowStep.waiting) return;
-
-    switch (verifyResult.status) {
-      case PaystackVerifyStatus.success:
-        _cancelTimers();
-        await _finalizeSaleSuccess(reference);
-        break;
-
-      case PaystackVerifyStatus.failed:
-      case PaystackVerifyStatus.abandoned:
-        _cancelTimers();
-        await PendingMomoStore.remove(reference);
-        if (!mounted) return;
-        setState(() {
-          _currentStep = MomoFlowStep.failed;
-          _errorMessage = verifyResult.gatewayResponse ?? 'Payment was declined by customer or system.';
-        });
-        break;
-
-      case PaystackVerifyStatus.pending:
-      case PaystackVerifyStatus.networkError:
-        // Continue waiting and polling
-        break;
-    }
+    await _handleVerifyResult(reference, verifyResult);
   }
 
   // ── Complete Sale on Success ──────────────────────────────────────────────
@@ -294,22 +374,8 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
     if (!mounted) return;
     setState(() => _isCheckingAgain = false);
 
-    switch (verifyResult.status) {
-      case PaystackVerifyStatus.success:
-        await _finalizeSaleSuccess(reference);
-      case PaystackVerifyStatus.failed:
-      case PaystackVerifyStatus.abandoned:
-        await PendingMomoStore.remove(reference);
-        if (!mounted) return;
-        setState(() {
-          _currentStep = MomoFlowStep.failed;
-          _errorMessage = verifyResult.gatewayResponse ??
-              'The customer did not approve the payment.';
-        });
-      case PaystackVerifyStatus.pending:
-      case PaystackVerifyStatus.networkError:
-        _startWaitingAndPolling(reference);
-    }
+    final keepChecking = await _handleVerifyResult(reference, verifyResult);
+    if (keepChecking && mounted) _startWaitingAndPolling(reference);
   }
 
   /// Leaving while a charge is unresolved risks the customer paying with
@@ -514,6 +580,25 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
               validator: (v) => validateGhanaPhone(v ?? ''),
             ),
 
+            const SizedBox(height: 16),
+            // Paystack requires an email. The customer's own is used if
+            // given; otherwise the server uses the shop's configured address.
+            TextFormField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(
+                labelText: 'Customer email (optional)',
+                hintText: 'For the customer\'s Paystack receipt',
+              ),
+              validator: (v) {
+                final e = (v ?? '').trim();
+                if (e.isEmpty) return null;
+                return RegExp(r'^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$').hasMatch(e)
+                    ? null
+                    : 'Enter a valid email, or leave it empty.';
+              },
+            ),
+
             if (_errorMessage != null) ...[
               const SizedBox(height: 12),
               Text(_errorMessage!,
@@ -626,6 +711,19 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (_pollIssue != null) ...[
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Icon(Icons.wifi_off_rounded, color: AppColors.warning, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(_pollIssue!,
+                        style: const TextStyle(color: AppColors.warning, fontSize: 13)),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),

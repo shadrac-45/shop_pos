@@ -15,6 +15,7 @@ import 'package:isar/isar.dart';
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
+import 'package:shop_pos/core/utils/id_helpers.dart';
 import 'package:shop_pos/features/activity/models/activity_log.dart';
 import 'package:shop_pos/features/activity/services/activity_log_service.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
@@ -96,6 +97,9 @@ class BackupService {
     Permissions.require(user, Permission.manageSettings);
     final data = _decode(bytes);
     final targets = _collections(isar);
+    // This phone keeps its own sync identity: a backup restored on a second
+    // till must not make it impersonate the first.
+    final thisDevice = (await isar.storeSettings.get(1))?.deviceId ?? '';
 
     await isar.writeTxn(() async {
       for (final c in targets.values) {
@@ -117,6 +121,14 @@ class BackupService {
           batch.product.value = product;
           await batch.product.save();
         }
+      }
+      final settings = await isar.storeSettings.get(1);
+      if (settings != null) {
+        settings
+          ..deviceId = thisDevice.isNotEmpty ? thisDevice : IdHelpers.newUuid()
+          // Pull everything once; records already here are skipped by uuid.
+          ..lastSyncAt = null;
+        await isar.storeSettings.put(settings);
       }
       await isar.activityLogs.put(ActivityLogService.entry(
           user, ActivityAction.restore, 'Restored from backup'));

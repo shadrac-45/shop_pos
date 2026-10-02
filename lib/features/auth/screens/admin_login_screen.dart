@@ -2,18 +2,23 @@
 /// Admin Login Screen — ShopPOS
 /// ============================================
 /// Email + Password login for the Owner/Admin role.
-/// Shown on first launch before the setup wizard,
-/// and on subsequent launches when Admin is selected.
+/// Shown on first launch before the setup wizard
+/// (where it creates the admin credentials), and on
+/// later launches when Admin is selected.
+///
+/// "Forgot password?" opens PasswordRecoveryScreen
+/// whenever an admin account exists; the first-time
+/// setup hint only appears when none does.
 /// ============================================
 library;
 
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/auth/screens/password_recovery_screen.dart';
 import 'package:shop_pos/features/auth/services/admin_auth_service.dart';
 import 'package:shop_pos/features/main/screens/main_shell_screen.dart';
 import 'package:shop_pos/features/setup/screens/setup_wizard_screen.dart';
@@ -32,46 +37,67 @@ class AdminLoginScreen extends ConsumerStatefulWidget {
 class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
   bool _loading = false;
   bool _obscurePass = true;
+
+  String? _emailError;
+  String? _passError;
+  String? _confirmError;
+
+  /// Form-level message (wrong credentials, server error).
   String? _errorMsg;
+
+  /// Shown after a successful password reset.
+  String? _successMsg;
+
+  bool get _creating => !widget.setupAlreadyDone;
 
   @override
   void dispose() {
     _emailCtrl.dispose();
     _passCtrl.dispose();
+    _confirmCtrl.dispose();
     super.dispose();
   }
 
+  bool _validate() {
+    final email = _emailCtrl.text;
+    final pass = _passCtrl.text;
+    setState(() {
+      _errorMsg = null;
+      _emailError = AdminAuthService.emailProblem(email);
+      if (_creating) {
+        // A new password must be strong and typed twice.
+        _passError = AdminAuthService.passwordProblem(pass, email: email);
+        _confirmError =
+            _passError == null && pass != _confirmCtrl.text ? 'The passwords don\'t match.' : null;
+      } else {
+        _passError = pass.isEmpty ? 'Enter your password.' : null;
+        _confirmError = null;
+      }
+    });
+    return _emailError == null && _passError == null && _confirmError == null;
+  }
+
   Future<void> _signIn() async {
+    if (!_validate()) return;
     final email = _emailCtrl.text.trim();
     final pass = _passCtrl.text;
-    if (email.isEmpty || pass.isEmpty) {
-      setState(() => _errorMsg = 'Enter both email and password.');
-      return;
-    }
-    // New passwords must be strong; existing ones are only checked against
-    // the stored hash.
-    if (!widget.setupAlreadyDone &&
-        pass.length < AdminAuthService.minPasswordLength) {
-      setState(() => _errorMsg =
-          'Password must be at least ${AdminAuthService.minPasswordLength} characters.');
-      return;
-    }
     setState(() {
       _loading = true;
-      _errorMsg = null;
+      _successMsg = null;
     });
 
     try {
       if (widget.setupAlreadyDone) {
         // ── Returning admin: verify email+password against DB ──────────
-        final isar = ref.read(isarProvider);
-        final user = await AdminAuthService.login(isar, email, pass);
+        final user = await AdminAuthService.login(ref.read(isarProvider), email, pass);
         if (!mounted) return;
         if (user == null) {
           setState(() {
-            _errorMsg = 'Invalid email or password.';
+            // Deliberately vague: doesn't say which part was wrong.
+            _errorMsg = 'Email or password is incorrect.';
             _loading = false;
           });
           return;
@@ -83,8 +109,7 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         );
       } else {
         // ── First-run setup: store credentials, navigate to wizard ─────
-        // The owner account is created when the wizard completes (saveAndComplete).
-        // No DB query needed here.
+        // The owner account is created when the wizard completes.
         ref.read(setupWizardProvider.notifier).update((s) => s.copyWith(
               adminEmail: email,
               adminPassword: pass,
@@ -97,15 +122,55 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMsg = 'An error occurred. Please try again.';
+          _errorMsg = 'Something went wrong. Please try again.';
           _loading = false;
         });
       }
     }
   }
 
+  Future<void> _forgotPassword() async {
+    final hasAdmin = await AdminAuthService.adminAccountExists(ref.read(isarProvider));
+    if (!mounted) return;
+
+    if (!hasAdmin) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('No admin account yet'),
+          content: const Text(
+            'This is first-time setup, so there is no password to recover. '
+            'Choose the email and password you want to use for the admin account.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final reset = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PasswordRecoveryScreen(initialEmail: _emailCtrl.text.trim()),
+    ));
+    if (reset == true && mounted) {
+      setState(() {
+        _passCtrl.clear();
+        _errorMsg = null;
+        _passError = null;
+        _successMsg = 'Password updated. Sign in with your new password.';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final score = AdminAuthService.passwordScore(_passCtrl.text);
+    const scoreLabels = ['Too weak', 'Weak', 'Fair', 'Good', 'Strong'];
+    const scoreColors = [
+      AppColors.danger, AppColors.danger, AppColors.warning, AppColors.success, AppColors.success,
+    ];
+
     return Scaffold(
       backgroundColor: const Color(0xFF14151D), // sidebar dark
       body: SafeArea(
@@ -115,7 +180,7 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 400),
               child: Container(
-                padding: const EdgeInsets.all(32),
+                padding: const EdgeInsets.all(28),
                 decoration: BoxDecoration(
                   color: AppColors.cardBg,
                   borderRadius: AppSpacing.borderXl,
@@ -129,101 +194,166 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                   ],
                 ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // ── Logo ──────────────────────────────
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: AppSpacing.borderMd,
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          borderRadius: AppSpacing.borderMd,
+                        ),
+                        child: const Icon(Icons.shopping_cart_rounded,
+                            color: Colors.white, size: 24),
                       ),
-                      child: const Icon(Icons.shopping_cart_rounded,
-                          color: Colors.white, size: 24),
                     ),
                     const SizedBox(height: AppSpacing.lg),
-
-                    // ── Title ─────────────────────────────
-                    Text('Sign in to admin console',
-                        style: Theme.of(context).textTheme.headlineMedium),
+                    Text(
+                      _creating ? 'Create your admin account' : 'Sign in to admin console',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
                     const SizedBox(height: 4),
                     Text(
-                      widget.setupAlreadyDone
-                          ? 'Welcome back. Enter your credentials.'
-                          : "Manage your store's setup and daily operations.",
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: AppColors.textSecondary,
-                          ),
+                      _creating
+                          ? 'You\'ll use this email and password to manage the store.'
+                          : 'Welcome back. Enter your credentials.',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.copyWith(color: AppColors.textSecondary),
                     ),
+                    if (_successMsg != null) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      Container(
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        decoration: BoxDecoration(
+                          color: AppColors.success.withValues(alpha: 0.1),
+                          borderRadius: AppSpacing.borderMd,
+                          border: Border.all(color: AppColors.success.withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.check_circle_rounded, color: AppColors.success),
+                            const SizedBox(width: AppSpacing.sm),
+                            Expanded(
+                              child: Text(_successMsg!,
+                                  style: const TextStyle(color: AppColors.successDarkText)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: AppSpacing.xl),
 
-                    // ── Email Field ───────────────────────
-                    Text('Email',
-                        style: Theme.of(context).textTheme.labelMedium),
-                    const SizedBox(height: 6),
                     TextField(
                       controller: _emailCtrl,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(
+                      autofillHints: const [AutofillHints.email],
+                      onChanged: (_) {
+                        if (_emailError != null) setState(() => _emailError = null);
+                      },
+                      decoration: InputDecoration(
+                        labelText: 'Email',
                         hintText: 'admin@yourstore.com',
+                        errorText: _emailError,
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.md),
+                    const SizedBox(height: AppSpacing.lg),
 
-                    // ── Password Field ────────────────────
-                    Text('Password',
-                        style: Theme.of(context).textTheme.labelMedium),
-                    const SizedBox(height: 6),
                     TextField(
                       controller: _passCtrl,
                       obscureText: _obscurePass,
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _signIn(),
+                      textInputAction: _creating ? TextInputAction.next : TextInputAction.done,
+                      autofillHints: [
+                        _creating ? AutofillHints.newPassword : AutofillHints.password
+                      ],
+                      onSubmitted: (_) => _creating ? null : _signIn(),
+                      onChanged: (_) => setState(() => _passError = null),
                       decoration: InputDecoration(
-                        hintText: 'Enter your password',
+                        labelText: 'Password',
+                        helperText: _creating
+                            ? 'At least ${AdminAuthService.minPasswordLength} characters, with a letter and a number.'
+                            : null,
+                        helperMaxLines: 2,
+                        errorText: _passError,
+                        errorMaxLines: 3,
                         suffixIcon: IconButton(
+                          tooltip: _obscurePass ? 'Show password' : 'Hide password',
                           icon: Icon(_obscurePass
                               ? Icons.visibility_off_outlined
                               : Icons.visibility_outlined),
-                          onPressed: () =>
-                              setState(() => _obscurePass = !_obscurePass),
+                          onPressed: () => setState(() => _obscurePass = !_obscurePass),
                         ),
                       ),
                     ),
 
-                    // ── Error ─────────────────────────────
-                    if (_errorMsg != null) ...[
-                      const SizedBox(height: AppSpacing.sm),
-                      Text(_errorMsg!,
-                          style: const TextStyle(
-                              color: AppColors.danger, fontSize: 13)),
-                    ],
-                    const SizedBox(height: AppSpacing.lg),
-
-                    // ── Sign In Button ────────────────────
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _loading ? null : _signIn,
-                        child: _loading
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Text('Sign in'),
+                    if (_creating) ...[
+                      if (_passCtrl.text.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  value: (score + 1) / 5,
+                                  minHeight: 5,
+                                  backgroundColor: AppColors.surfaceBg,
+                                  color: scoreColors[score],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(scoreLabels[score],
+                                style: TextStyle(color: scoreColors[score], fontSize: 12)),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: AppSpacing.lg),
+                      TextField(
+                        controller: _confirmCtrl,
+                        obscureText: _obscurePass,
+                        textInputAction: TextInputAction.done,
+                        autofillHints: const [AutofillHints.newPassword],
+                        onSubmitted: (_) => _signIn(),
+                        onChanged: (_) {
+                          if (_confirmError != null) setState(() => _confirmError = null);
+                        },
+                        decoration: InputDecoration(
+                          labelText: 'Confirm password',
+                          errorText: _confirmError,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: AppSpacing.md),
+                    ],
 
-                    // ── Forgot password ───────────────────
+                    if (_errorMsg != null) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      Text(_errorMsg!,
+                          style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+                    ],
+                    const SizedBox(height: AppSpacing.xl),
+
+                    ElevatedButton(
+                      onPressed: _loading ? null : _signIn,
+                      style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : Text(_creating ? 'Continue to store setup' : 'Sign in'),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+
                     Center(
                       child: TextButton(
-                        onPressed: () => _showForgotHint(context),
+                        onPressed: _loading ? null : _forgotPassword,
                         child: const Text('Forgot password?',
                             style: TextStyle(color: AppColors.primary)),
                       ),
@@ -235,165 +365,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Future<void> _showForgotHint(BuildContext context) async {
-    if (!widget.setupAlreadyDone) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Password Recovery'),
-          content: const Text(
-            'This is first-time setup: choose the email and password you '
-            'want to use for the admin account.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    final reset = await showDialog<bool>(
-      context: context,
-      builder: (_) => _ResetPasswordDialog(initialEmail: _emailCtrl.text.trim()),
-    );
-    if (reset == true && mounted) {
-      setState(() => _errorMsg = null);
-      ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(
-        content: Text('Password reset. Sign in with your new password.'),
-        backgroundColor: AppColors.success,
-      ));
-    }
-  }
-}
-
-/// Reset the admin password using the owner PIN as proof of identity.
-class _ResetPasswordDialog extends ConsumerStatefulWidget {
-  final String initialEmail;
-  const _ResetPasswordDialog({required this.initialEmail});
-
-  @override
-  ConsumerState<_ResetPasswordDialog> createState() =>
-      _ResetPasswordDialogState();
-}
-
-class _ResetPasswordDialogState extends ConsumerState<_ResetPasswordDialog> {
-  late final _emailCtrl = TextEditingController(text: widget.initialEmail);
-  final _pinCtrl = TextEditingController();
-  final _passCtrl = TextEditingController();
-  final _confirmCtrl = TextEditingController();
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _emailCtrl.dispose();
-    _pinCtrl.dispose();
-    _passCtrl.dispose();
-    _confirmCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_passCtrl.text != _confirmCtrl.text) {
-      setState(() => _error = 'The new passwords do not match.');
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    final result = await AdminAuthService.resetPasswordWithPin(
-      ref.read(isarProvider),
-      email: _emailCtrl.text,
-      ownerPin: _pinCtrl.text,
-      newPassword: _passCtrl.text,
-    );
-    if (!mounted) return;
-    switch (result) {
-      case PasswordResetResult.success:
-        Navigator.of(context).pop(true);
-        return;
-      case PasswordResetResult.invalidCredentials:
-        _error = 'Email or owner PIN is incorrect.';
-      case PasswordResetResult.defaultPin:
-        _error = 'Your owner PIN is still the default PIN, so it cannot be '
-            'used to reset the password. Contact ShopPOS support.';
-      case PasswordResetResult.weakPassword:
-        _error = 'Password must be at least '
-            '${AdminAuthService.minPasswordLength} characters.';
-    }
-    setState(() => _saving = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Reset Admin Password'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Confirm it is you with your owner PIN, then choose a new password.',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            TextField(
-              controller: _emailCtrl,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(labelText: 'Admin email'),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _pinCtrl,
-              keyboardType: TextInputType.number,
-              obscureText: true,
-              maxLength: AppConstants.maxPinLength,
-              decoration: const InputDecoration(labelText: 'Owner PIN'),
-            ),
-            TextField(
-              controller: _passCtrl,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'New password'),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _confirmCtrl,
-              obscureText: true,
-              decoration:
-                  const InputDecoration(labelText: 'Confirm new password'),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: AppSpacing.sm),
-              Text(_error!,
-                  style: const TextStyle(color: AppColors.danger, fontSize: 13)),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _saving ? null : _submit,
-          child: _saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text('Reset Password'),
-        ),
-      ],
     );
   }
 }

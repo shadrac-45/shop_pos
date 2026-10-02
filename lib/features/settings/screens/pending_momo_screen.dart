@@ -16,7 +16,6 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
-import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
@@ -59,20 +58,36 @@ class _PendingMomoScreenState extends ConsumerState<PendingMomoScreen> {
 
   Future<void> _check(PendingMomoPayment p) async {
     setState(() => _busyRef = p.reference);
-    final result = await ref.read(paystackServiceProvider).verifyStatus(p.reference);
+    var result = await ref.read(paystackServiceProvider).verifyStatus(p.reference);
     if (!mounted) return;
+    // Same amount check as the payment screen.
+    if (result.status == PaystackVerifyStatus.success &&
+        result.amountPesewas != null &&
+        result.amountPesewas != (p.amountGhs * 100).round()) {
+      result = PaystackVerifyResult(
+          status: PaystackVerifyStatus.amountMismatch, amountPesewas: result.amountPesewas);
+    }
     switch (result.status) {
       case PaystackVerifyStatus.success:
         await PendingMomoStore.setStatus(p.reference, PendingMomoStatus.paidNotSaved);
         _statusText[p.reference] = 'PAID — record the sale below.';
       case PaystackVerifyStatus.failed:
       case PaystackVerifyStatus.abandoned:
+      case PaystackVerifyStatus.notFound:
+      case PaystackVerifyStatus.invalidReference:
         await PendingMomoStore.remove(p.reference);
         if (mounted) context.showSuccessSnackbar('Not paid, so nothing to record. Removed.');
+      case PaystackVerifyStatus.amountMismatch:
+        _statusText[p.reference] = 'Paid, but a DIFFERENT amount '
+            '(${result.amountPesewas == null ? '?' : CurrencyHelpers.format(result.amountPesewas! / 100)}). '
+            'Check the Paystack dashboard; record the sale by hand if correct.';
       case PaystackVerifyStatus.pending:
         _statusText[p.reference] = 'Still waiting for the customer.';
+      case PaystackVerifyStatus.unauthorized:
+        _statusText[p.reference] = 'The payment server rejected the API key. Fix Settings → Integrations.';
       case PaystackVerifyStatus.networkError:
-        _statusText[p.reference] = 'Could not reach the backend. Try again later.';
+      case PaystackVerifyStatus.gatewayError:
+        _statusText[p.reference] = 'Could not reach the payment server or Paystack. Try again later.';
     }
     setState(() => _busyRef = null);
     await _load();
@@ -103,8 +118,15 @@ class _PendingMomoScreenState extends ConsumerState<PendingMomoScreen> {
         isar,
         ref.read(currentUserProvider),
         lines: lines,
-        payments: [PaymentInput(AppConstants.paymentMomo, p.amountGhs, reference: p.reference)],
-        tax: ref.read(taxConfigProvider),
+        payments: [
+          for (final o in p.otherPayments)
+            PaymentInput(o['method'] as String, (o['amount'] as num).toDouble(),
+                reference: o['reference'] as String?),
+          PaymentInput(AppConstants.paymentMomo, p.amountGhs, reference: p.reference),
+        ],
+        saleDiscount: p.saleDiscount,
+        amountTendered: p.amountTendered,
+        tax: TaxConfig(rate: p.taxRate, pricesIncludeTax: p.pricesIncludeTax),
         paystackReference: p.reference,
         momoProvider: p.provider,
         momoPhone: p.phone,
@@ -118,8 +140,7 @@ class _PendingMomoScreenState extends ConsumerState<PendingMomoScreen> {
           builder: (_) => SaleDetailScreen(saleId: sale.id)));
     } catch (e) {
       if (mounted) {
-        context.showErrorSnackbar(
-            '${errorMessage(e)} If it was a split payment, record it by hand.');
+        context.showErrorSnackbar(errorMessage(e));
       }
     } finally {
       if (mounted) setState(() => _busyRef = null);

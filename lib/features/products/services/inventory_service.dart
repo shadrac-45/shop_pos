@@ -44,6 +44,9 @@ class ProductInput {
   final String? sku;
   final int reorderLevel;
 
+  /// Photo path on this device; null for none.
+  final String? imagePath;
+
   const ProductInput({
     required this.name,
     required this.price,
@@ -53,6 +56,7 @@ class ProductInput {
     this.barcode,
     this.sku,
     this.reorderLevel = 0,
+    this.imagePath,
   });
 }
 
@@ -465,6 +469,7 @@ class InventoryService {
       ..barcode = blankToNull(input.barcode)
       ..sku = blankToNull(input.sku)
       ..reorderLevel = input.reorderLevel < 0 ? 0 : input.reorderLevel
+      ..imagePath = input.imagePath
       ..updatedAt = now
       ..isSynced = false;
     product.uuid ??= IdHelpers.newUuid();

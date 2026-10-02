@@ -9,7 +9,11 @@
 /// ============================================
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:shop_pos/features/products/services/product_image_service.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/constants/app_constants.dart';
@@ -49,6 +53,9 @@ abstract class BaseProductDialogState<T extends BaseProductDialog>
   final skuController = TextEditingController();
   final reorderController = TextEditingController();
 
+  /// Current photo (may be a newly taken one not yet saved).
+  String? imagePath;
+
   @override
   void dispose() {
     costController.dispose();
@@ -64,6 +71,64 @@ abstract class BaseProductDialogState<T extends BaseProductDialog>
     barcodeController.text = p.barcode ?? '';
     skuController.text = p.sku ?? '';
     reorderController.text = p.reorderLevel > 0 ? '${p.reorderLevel}' : '';
+    imagePath = p.imagePath;
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final path = await ProductImageService.pick(source);
+      if (path != null && mounted) setState(() => imagePath = path);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not get the photo: $e')),
+        );
+      }
+    }
+  }
+
+  /// Photo thumbnail with camera / gallery / remove buttons.
+  Widget buildImagePicker() {
+    final hasImage = ProductImageService.exists(imagePath);
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            width: 72,
+            height: 72,
+            color: AppColors.surfaceBg,
+            child: hasImage
+                ? Image.file(File(imagePath!), fit: BoxFit.cover)
+                : const Icon(Icons.image_outlined, color: AppColors.textMuted, size: 32),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Wrap(
+            spacing: 4,
+            children: [
+              TextButton.icon(
+                onPressed: () => _pickImage(ImageSource.camera),
+                icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                label: const Text('Camera'),
+              ),
+              TextButton.icon(
+                onPressed: () => _pickImage(ImageSource.gallery),
+                icon: const Icon(Icons.photo_library_outlined, size: 18),
+                label: const Text('Gallery'),
+              ),
+              if (hasImage)
+                TextButton.icon(
+                  onPressed: () => setState(() => imagePath = null),
+                  icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.danger),
+                  label: const Text('Remove', style: TextStyle(color: AppColors.danger)),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   double? get costValue {

@@ -10,7 +10,10 @@
 /// ============================================
 library;
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:shop_pos/features/products/services/product_image_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -247,12 +250,23 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
                         final onlyExpired = isOutOfStock && product.totalStock > 0;
                         final tileBg = Color(product.quickButtonColor);
 
+                        final hasImage = ProductImageService.exists(product.imagePath);
                         return TouchableCard(
                           onTap: () => _onAddProductToCart(product),
                           backgroundColor: tileBg,
                           borderColor: AppColors.border,
-                          padding: const EdgeInsets.all(AppSpacing.xs),
-                          child: Opacity(
+                          padding: hasImage ? EdgeInsets.zero : const EdgeInsets.all(AppSpacing.xs),
+                          child: hasImage
+                              ? _ImageTile(
+                                  product: product,
+                                  stockLabel: onlyExpired
+                                      ? 'EXPIRED'
+                                      : isOutOfStock
+                                          ? 'OUT OF STOCK'
+                                          : 'Stock: $sellableStock',
+                                  dimmed: isOutOfStock,
+                                )
+                              : Opacity(
                             opacity: isOutOfStock ? 0.45 : 1.0,
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -413,6 +427,59 @@ class _CashierSalesScreenState extends ConsumerState<CashierSalesScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Product button showing the product photo, with name, price and stock
+/// over a dark gradient so the text stays readable.
+class _ImageTile extends StatelessWidget {
+  final Product product;
+  final String stockLabel;
+  final bool dimmed;
+  const _ImageTile({required this.product, required this.stockLabel, required this.dimmed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: dimmed ? 0.45 : 1,
+      child: ClipRRect(
+        borderRadius: AppSpacing.borderLg,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.file(File(product.imagePath!), fit: BoxFit.cover),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black87],
+                  stops: [0.35, 1],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text(product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+                  Text('${CurrencyHelpers.formatCompact(product.price)} · $stockLabel',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

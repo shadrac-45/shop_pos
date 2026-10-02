@@ -80,7 +80,7 @@ class AppConstants {
   // ── Backend ─────────────────────────────────
   /// Used only when no URL is saved in StoreSettings: the Android emulator's
   /// address for a backend running on the development machine.
-  static const String devBackendBaseUrl = 'http://10.0.2.2:3000/api';
+  static const String devBackendBaseUrl = 'http://10.0.2.2:3001/api';
 
   // ── UI Palette (delegated to AppColors for single source of truth) ─
   static List<Color> get quickButtonPalette => AppColors.quickButtonPalette;

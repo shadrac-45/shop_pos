@@ -16,7 +16,6 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:isar/isar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:shop_pos/features/activity/models/activity_log.dart';
@@ -137,12 +136,8 @@ class AuthNotifier extends StateNotifier<AppUser?> {
     }
 
     final isar = ref.read(isarProvider);
-    // Hash off the main isolate so the UI never freezes.
-    final hashedPin = await AuthService.hashPinAsync(pin);
-
-    // Query by hashed PIN — the only supported auth path.
-    final user =
-        await isar.appUsers.filter().pinHashEqualTo(hashedPin).findFirst();
+    // Checked against each account's salted hash, off the main isolate.
+    final user = await AuthService.findUserByPin(isar, pin);
 
     if (user != null) {
       // Block login for deactivated accounts.
@@ -161,6 +156,7 @@ class AuthNotifier extends StateNotifier<AppUser?> {
       _failedAttempts = 0;
       _lockedUntil = null;
       await _persistLockout();
+      await AuthService.upgradePinHashIfNeeded(isar, user, pin);
       _signIn(user, 'PIN');
       return LoginResult.success;
     }
@@ -187,8 +183,10 @@ class AuthNotifier extends StateNotifier<AppUser?> {
 
     current
       ..pinHash = hashedPin
+      ..credentialVersion += 1
       ..updatedAt = DateTime.now()
       ..isSynced = false;
+    _signedInVersion = current.credentialVersion;
     await isar.writeTxn(() async {
       await isar.appUsers.put(current);
       await isar.activityLogs.put(ActivityLogService.entry(
@@ -207,7 +205,25 @@ class AuthNotifier extends StateNotifier<AppUser?> {
     _signIn(user, 'email');
   }
 
+  /// The signed-in account's [AppUser.credentialVersion] at sign-in.
+  int? _signedInVersion;
+
+  /// Ends the session if the signed-in account was deactivated or its
+  /// password/PIN was reset since sign-in (e.g. through password recovery).
+  /// Called on user activity, so a stale session can't keep working.
+  void checkSessionStillValid() {
+    final user = state;
+    if (user == null) return;
+    final fresh = ref.read(isarProvider).appUsers.getSync(user.id);
+    if (fresh == null ||
+        !fresh.isActive ||
+        fresh.credentialVersion != _signedInVersion) {
+      logout(timedOut: false);
+    }
+  }
+
   void _signIn(AppUser user, String method) {
+    _signedInVersion = user.credentialVersion;
     state = user;
     ref.read(sessionManagerProvider).startSession();
     ActivityLogService.log(

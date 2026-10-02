@@ -26,6 +26,8 @@ import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/reports/providers/report_provider.dart';
 import 'package:shop_pos/features/sales/models/sale.dart';
 import 'package:shop_pos/features/sales/models/sale_item.dart';
+import 'package:shop_pos/features/sales/services/bluetooth_printer_service.dart';
+import 'package:shop_pos/features/sales/services/escpos.dart';
 import 'package:shop_pos/features/sales/services/receipt_service.dart';
 import 'package:shop_pos/features/sales/services/sale_service.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
@@ -70,10 +72,56 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
         await ReceiptData.load(isar, sale, ref.read(storeSettingsProvider));
     if (!mounted) return;
     setState(() => _receipt = receipt);
-    if (autoPrint && receipt.store.printerEnabled) _print();
+    if (autoPrint) _afterSale(receipt);
   }
 
-  Future<void> _print() async {
+  /// Right after checkout: print if auto-print is on, and open the cash
+  /// drawer for sales that took cash.
+  Future<void> _afterSale(ReceiptData r) async {
+    final store = r.store;
+    final tookCash = r.sale.effectivePayments
+        .any((p) => p.method == AppConstants.paymentCash && p.amount > 0);
+    final kickDrawer =
+        store.cashDrawerEnabled && tookCash && store.printerAddress.isNotEmpty;
+    if (store.printerEnabled) {
+      await _print(openDrawer: kickDrawer);
+    } else if (kickDrawer) {
+      try {
+        await BluetoothPrinterService.send(
+            store.printerAddress, (EscPosBuilder()..openDrawer()).build());
+      } catch (e) {
+        if (mounted) context.showErrorSnackbar('Cash drawer: ${errorMessage(e)}');
+      }
+    }
+  }
+
+  /// Prints on the chosen Bluetooth printer, or through the Android print
+  /// dialog when none is set up.
+  Future<void> _print({bool openDrawer = false}) async {
+    final r = _receipt;
+    if (r == null) return;
+    if (r.store.printerAddress.isNotEmpty) {
+      try {
+        await BluetoothPrinterService.send(
+          r.store.printerAddress,
+          EscPosReceipt.build(r, paperMm: r.store.printerPaperMm, openDrawer: openDrawer),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        final useDialog = await confirmDialog(
+          context,
+          title: 'Printer problem',
+          message: '${errorMessage(e)}\n\nPrint through the Android print dialog instead?',
+          confirmLabel: 'Use Print Dialog',
+        );
+        if (useDialog) await _printWithDialog();
+      }
+      return;
+    }
+    await _printWithDialog();
+  }
+
+  Future<void> _printWithDialog() async {
     final r = _receipt;
     if (r == null) return;
     try {

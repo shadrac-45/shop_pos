@@ -43,13 +43,30 @@ class StoreSettings {
   bool scannerEnabled = false;
   bool cashDrawerEnabled = false;
 
-  // ── Backend (MoMo + cloud sync) ──────────
-  /// Base URL of the ShopPOS backend, e.g. https://pos.example.com/api.
-  /// Empty means not configured.
+  /// Paired Bluetooth receipt printer (ESC/POS). Empty means print through
+  /// the system print dialog instead.
+  String printerAddress = '';
+  String printerName = '';
+
+  /// Paper roll width in mm: 58 or 80.
+  int printerPaperMm = 58;
+
+  // ── Payment server (Mobile Money) ────────
+  /// Base URL of the payment server, e.g. https://pay.example.com/api.
+  /// Empty means Mobile Money is not configured.
   String backendUrl = '';
 
-  /// Shared secret sent to the backend's sync API.
+  /// API key sent to the payment server as x-api-key. (Named before sync
+  /// got its own server; kept so saved settings carry over.)
   String syncApiKey = '';
+
+  // ── Cloud sync server (optional) ─────────
+  /// Base URL of the sync server (backend/ in this repo), e.g.
+  /// https://sync.example.com/api. Empty means sync is off.
+  String syncServerUrl = '';
+
+  /// API key for the sync server.
+  String syncServerKey = '';
 
   /// Identifies this device to the sync server.
   String deviceId = '';

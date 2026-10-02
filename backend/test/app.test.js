@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { PaystackClient, toLocalGhanaPhone } from '../src/paystack.js';
 import { SyncStore } from '../src/store.js';
+import { loadShops } from '../src/shops.js';
 
 /** Fake Paystack: records requests, returns canned responses. */
 function fakePaystack(responses) {
@@ -21,8 +22,16 @@ function fakePaystack(responses) {
   return { calls, client: new PaystackClient({ secretKey: 'sk_test_x', fetchImpl }) };
 }
 
+/** Single shop from the old-style options, or pass `shops` directly. */
+function appOptions({ apiKey, paystack, store, shops, openPaystack }) {
+  if (shops) return { shops, openPaystack };
+  return apiKey
+    ? { shops: [{ id: 'default', apiKey, paystack, store }] }
+    : { shops: [], openPaystack: paystack };
+}
+
 async function withServer(options, fn) {
-  const server = http.createServer(createApp(options));
+  const server = http.createServer(createApp(appOptions(options)));
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -134,6 +143,70 @@ test('sync push stores records and pull returns other devices’ products', asyn
     assert.equal((await res.json()).products.length, 0);
   });
   assert.equal(store.count('sales'), 1);
+});
+
+test('pull returns every shared collection', async () => {
+  await withServer({ apiKey: 'k', paystack: null, store: tempStore() }, async (base) => {
+    const h = (d) => ({ 'x-api-key': 'k', 'x-device-id': d, 'content-type': 'application/json' });
+    await fetch(`${base}/api/sync/push`, {
+      method: 'POST',
+      headers: h('a'),
+      body: JSON.stringify({
+        collections: {
+          stockMovements: [{ uuid: 'm1', quantityChange: -2 }],
+          saleItems: [{ uuid: 's1#1', saleUuid: 's1' }],
+          expenses: [{ uuid: 'e1', amount: 5 }],
+          shifts: [{ uuid: 'sh1' }],
+        },
+      }),
+    });
+    const pulled = await (await fetch(`${base}/api/sync/pull`, { headers: h('b') })).json();
+    assert.equal(pulled.stockMovements.length, 1);
+    assert.equal(pulled.saleItems.length, 1);
+    assert.equal(pulled.expenses.length, 1);
+    assert.equal(pulled.shifts, undefined); // shifts stay per device
+  });
+});
+
+test('shops on one server never see each other’s data', async () => {
+  const shops = [
+    { id: 'shop-a', apiKey: 'a'.repeat(20), paystack: null, store: tempStore() },
+    { id: 'shop-b', apiKey: 'b'.repeat(20), paystack: null, store: tempStore() },
+  ];
+  await withServer({ shops }, async (base) => {
+    const h = (key, d) => ({ 'x-api-key': key, 'x-device-id': d, 'content-type': 'application/json' });
+    await fetch(`${base}/api/sync/push`, {
+      method: 'POST',
+      headers: h('a'.repeat(20), 'a1'),
+      body: JSON.stringify({ collections: { products: [{ uuid: 'p', name: 'A only' }] } }),
+    });
+    const b = await (await fetch(`${base}/api/sync/pull`, { headers: h('b'.repeat(20), 'b1') })).json();
+    assert.equal(b.products.length, 0);
+    const a2 = await (await fetch(`${base}/api/sync/pull`, { headers: h('a'.repeat(20), 'a2') })).json();
+    assert.equal(a2.products[0].name, 'A only');
+    const bad = await fetch(`${base}/api/sync/pull`, { headers: h('c'.repeat(20), 'x') });
+    assert.equal(bad.status, 401);
+  });
+});
+
+test('shops file validation', () => {
+  const read = (json) => () => json;
+  assert.deepEqual(
+    loadShops({ apiKey: 'k', paystackSecretKey: 'sk', readFile: read('') }),
+    [{ id: 'default', apiKey: 'k', paystackSecretKey: 'sk' }],
+  );
+  assert.deepEqual(loadShops({ readFile: read('') }), []);
+  const ok = loadShops({
+    shopsFile: 'f',
+    readFile: read(JSON.stringify([{ id: 'kofi', apiKey: 'x'.repeat(16) }])),
+  });
+  assert.equal(ok[0].id, 'kofi');
+  assert.throws(() => loadShops({ shopsFile: 'f', readFile: read('[{"id":"Bad Id","apiKey":"xxxxxxxxxxxxxxxx"}]') }));
+  assert.throws(() => loadShops({ shopsFile: 'f', readFile: read('[{"id":"a","apiKey":"short"}]') }));
+  assert.throws(() => loadShops({
+    shopsFile: 'f',
+    readFile: read(JSON.stringify([{ id: 'a', apiKey: 'y'.repeat(16) }, { id: 'b', apiKey: 'y'.repeat(16) }])),
+  }));
 });
 
 test('sync is refused when the server has no API key', async () => {

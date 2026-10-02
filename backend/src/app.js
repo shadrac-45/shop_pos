@@ -6,11 +6,16 @@
 //   POST /api/momo/charge            start a MoMo charge
 //   GET  /api/momo/verify/:reference check a charge
 //   POST /api/sync/push              upload changed records
-//   GET  /api/sync/pull?since=ISO    catalog changes from other devices
+//   GET  /api/sync/pull?since=ISO    other devices' changes
 //
-// When API_KEY is set, every /api route needs the
-// header `x-api-key: <API_KEY>`. Sync routes are
-// refused entirely without an API_KEY.
+// One server can host several shops. Each shop
+// has its own API key (sent as `x-api-key`), its
+// own Paystack key and its own data, and never
+// sees another shop's records.
+//
+// With no shops configured, only MoMo works,
+// unauthenticated, through `openPaystack`
+// (local development).
 // ============================================
 
 import { timingSafeEqual } from 'node:crypto';
@@ -18,7 +23,26 @@ import { SYNC_COLLECTIONS } from './store.js';
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
-export function createApp({ apiKey, paystack, store }) {
+/** Collections a device downloads from the other devices of its shop. */
+export const PULLED_COLLECTIONS = [
+  'products',
+  'users',
+  'batches',
+  'sales',
+  'saleItems',
+  'stockMovements',
+  'expenses',
+];
+
+/**
+ * @param {object} options
+ * @param {{id: string, apiKey: string, paystack: object|null, store: object}[]} options.shops
+ * @param {object|null} [options.openPaystack] used when no shops are configured
+ */
+export function createApp({ shops = [], openPaystack = null }) {
+  const findShop = (key) =>
+    typeof key === 'string' ? shops.find((s) => keyMatches(key, s.apiKey)) : undefined;
+
   return async function handle(req, res) {
     try {
       const url = new URL(req.url, 'http://localhost');
@@ -27,19 +51,26 @@ export function createApp({ apiKey, paystack, store }) {
       if (route === 'GET /health') {
         return send(res, 200, {
           status: 'ok',
-          momo: Boolean(paystack),
-          sync: Boolean(apiKey && store),
+          shops: shops.length,
+          momo: shops.some((s) => s.paystack) || Boolean(openPaystack),
+          sync: shops.length > 0,
         });
       }
 
-      if (url.pathname.startsWith('/api/')) {
-        if (apiKey && !keyMatches(req.headers['x-api-key'], apiKey)) {
-          return send(res, 401, { success: false, message: 'Invalid or missing API key.' });
-        }
+      if (!url.pathname.startsWith('/api/')) {
+        return send(res, 404, { success: false, message: 'Not found' });
       }
 
+      // ── Which shop is calling ──
+      let shop = null;
+      if (shops.length > 0) {
+        shop = findShop(req.headers['x-api-key']);
+        if (!shop) return send(res, 401, { success: false, message: 'Invalid or missing API key.' });
+      }
+      const paystack = shop ? shop.paystack : openPaystack;
+
       if (route === 'POST /api/momo/charge') {
-        if (!paystack) return notConfigured(res, 'PAYSTACK_SECRET_KEY');
+        if (!paystack) return notConfigured(res, 'a Paystack secret key');
         const body = await readJson(req);
         const result = await paystack.charge({
           phone: body.phone,
@@ -52,14 +83,15 @@ export function createApp({ apiKey, paystack, store }) {
 
       const verify = url.pathname.match(/^\/api\/momo\/verify\/([^/]+)$/);
       if (req.method === 'GET' && verify) {
-        if (!paystack) return notConfigured(res, 'PAYSTACK_SECRET_KEY');
+        if (!paystack) return notConfigured(res, 'a Paystack secret key');
         return send(res, 200, await paystack.verify(decodeURIComponent(verify[1])));
       }
 
       if (url.pathname.startsWith('/api/sync/')) {
-        if (!apiKey || !store) return notConfigured(res, 'API_KEY');
+        if (!shop) return notConfigured(res, 'API_KEY or SHOPS_FILE');
         const deviceId = String(req.headers['x-device-id'] ?? '');
         if (!deviceId) return send(res, 400, { success: false, message: 'Missing x-device-id header.' });
+        const { store } = shop;
 
         if (route === 'POST /api/sync/push') {
           const body = await readJson(req);
@@ -76,11 +108,11 @@ export function createApp({ apiKey, paystack, store }) {
 
         if (route === 'GET /api/sync/pull') {
           const since = url.searchParams.get('since') || null;
-          return send(res, 200, {
-            success: true,
-            serverTime: new Date().toISOString(),
-            products: store.changesSince('products', since, deviceId),
-          });
+          const body = { success: true, serverTime: new Date().toISOString() };
+          for (const name of PULLED_COLLECTIONS) {
+            body[name] = store.changesSince(name, since, deviceId);
+          }
+          return send(res, 200, body);
         }
       }
 
@@ -96,7 +128,7 @@ export function createApp({ apiKey, paystack, store }) {
 class BadRequest extends Error {}
 
 function keyMatches(given, expected) {
-  if (typeof given !== 'string') return false;
+  if (typeof given !== 'string' || typeof expected !== 'string') return false;
   const a = Buffer.from(given);
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);

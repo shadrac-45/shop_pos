@@ -21,6 +21,7 @@ import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/products/services/inventory_service.dart';
+import 'package:shop_pos/features/products/services/product_image_service.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
 import 'package:shop_pos/features/products/widgets/base_product_dialog.dart';
@@ -161,6 +162,11 @@ class _EditProductDialogState
       ),
 
       const SizedBox(height: 14),
+      buildLabel('Photo'),
+      const SizedBox(height: 6),
+      buildImagePicker(),
+
+      const SizedBox(height: 14),
       ...buildInventoryFields(),
       const SizedBox(height: 10),
     ];
@@ -174,6 +180,7 @@ class _EditProductDialogState
 
     setState(() => isLoading = true);
 
+    final previousImage = widget.product.imagePath;
     try {
       await InventoryService.updateProduct(
         ref.read(isarProvider),
@@ -189,8 +196,12 @@ class _EditProductDialogState
           barcode: barcodeController.text,
           sku: skuController.text,
           reorderLevel: reorderValue,
+          imagePath: imagePath,
         ),
       );
+      if (previousImage != imagePath) {
+        await ProductImageService.delete(previousImage);
+      }
 
       if (!mounted) return;
 

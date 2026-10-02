@@ -214,6 +214,7 @@ class SaleService {
           at: now,
         );
         items.add(SaleItem()
+          ..uuid = IdHelpers.newUuid()
           ..saleId = sale.id
           ..productId = line.product.id
           ..productName = line.product.name

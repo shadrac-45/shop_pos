@@ -34,6 +34,16 @@ class PendingMomoPayment {
   final DateTime createdAt;
   final PendingMomoStatus status;
 
+  /// The rest of a split payment: [{method, amount, reference}].
+  final List<Map<String, dynamic>> otherPayments;
+  final double? amountTendered;
+
+  /// Checkout settings at the time, so a later "Record sale" reproduces
+  /// exactly the total the customer was charged.
+  final double saleDiscount;
+  final double taxRate;
+  final bool pricesIncludeTax;
+
   const PendingMomoPayment({
     required this.reference,
     required this.amountGhs,
@@ -43,6 +53,11 @@ class PendingMomoPayment {
     required this.itemsJson,
     required this.createdAt,
     this.status = PendingMomoStatus.awaitingApproval,
+    this.otherPayments = const [],
+    this.amountTendered,
+    this.saleDiscount = 0,
+    this.taxRate = 0,
+    this.pricesIncludeTax = true,
   });
 
   PendingMomoPayment withStatus(PendingMomoStatus status) => PendingMomoPayment(
@@ -54,6 +69,11 @@ class PendingMomoPayment {
         itemsJson: itemsJson,
         createdAt: createdAt,
         status: status,
+        otherPayments: otherPayments,
+        amountTendered: amountTendered,
+        saleDiscount: saleDiscount,
+        taxRate: taxRate,
+        pricesIncludeTax: pricesIncludeTax,
       );
 
   Map<String, dynamic> toJson() => {
@@ -65,6 +85,11 @@ class PendingMomoPayment {
         'itemsJson': itemsJson,
         'createdAt': createdAt.toIso8601String(),
         'status': status.name,
+        'otherPayments': otherPayments,
+        'amountTendered': amountTendered,
+        'saleDiscount': saleDiscount,
+        'taxRate': taxRate,
+        'pricesIncludeTax': pricesIncludeTax,
       };
 
   factory PendingMomoPayment.fromJson(Map<String, dynamic> json) =>
@@ -80,6 +105,14 @@ class PendingMomoPayment {
           (s) => s.name == json['status'],
           orElse: () => PendingMomoStatus.awaitingApproval,
         ),
+        otherPayments: [
+          for (final p in json['otherPayments'] as List? ?? const [])
+            Map<String, dynamic>.from(p as Map),
+        ],
+        amountTendered: (json['amountTendered'] as num?)?.toDouble(),
+        saleDiscount: (json['saleDiscount'] as num?)?.toDouble() ?? 0,
+        taxRate: (json['taxRate'] as num?)?.toDouble() ?? 0,
+        pricesIncludeTax: json['pricesIncludeTax'] as bool? ?? true,
       );
 }
 

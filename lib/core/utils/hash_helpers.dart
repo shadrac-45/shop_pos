@@ -1,19 +1,28 @@
 /// ============================================
 /// Hash Helpers — ShopPOS
 /// ============================================
-/// Cryptographic utility functions for hashing
-/// PINs using SHA-256 with a domain-separated salt.
+/// PINs and passwords are stored as bcrypt
+/// hashes (random salt per hash, deliberately
+/// slow), never in plain text.
 ///
-/// SHA-256 is appropriate here: 4-digit PIN
-/// brute-force protection relies on the login
-/// lockout mechanism, not hash cost.
+/// Hashes written by older versions (salted
+/// SHA-256) still verify, and are upgraded to
+/// bcrypt the next time the right PIN or
+/// password is entered (see [needsRehash]).
 ///
-/// hashPinAsync() offloads to a background isolate
-/// via compute() so the UI never freezes.
+/// Because every bcrypt hash has its own salt, a
+/// PIN can't be found by looking its hash up:
+/// use [findPinMatch] to test it against each
+/// account instead.
+///
+/// The `...Async` variants run in a background
+/// isolate so the UI never freezes.
 /// ============================================
 library;
 
 import 'dart:convert';
+
+import 'package:bcrypt/bcrypt.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
@@ -21,48 +30,103 @@ import 'package:shop_pos/core/constants/app_constants.dart';
 class HashHelpers {
   HashHelpers._();
 
-  // ── PIN Hashing ────────────────────────────────────────
+  /// bcrypt cost (2^n rounds). PINs are tried against every account at
+  /// login, so they use a lower cost than passwords; a 4–6 digit PIN's real
+  /// protection is the attempt lockout, not hash cost.
+  static const pinLogRounds = 8;
+  static const passwordLogRounds = 10;
 
-  /// Hash a raw PIN string using SHA-256 with a standard salt.
-  /// Synchronous — only call from an isolate or when no UI freeze matters.
-  static String hashPin(String rawPin) {
-    const salt = 'ShopPOS_Salt_2026_Ghana';
-    final bytes = utf8.encode('$salt:$rawPin');
-    final digest = sha256.convert(bytes);
-    return digest.toString();
-  }
+  /// bcrypt only reads the first 72 bytes of its input.
+  static const maxSecretBytes = 72;
 
-  /// Hash a raw PIN string off the main thread via [compute].
-  /// Use this from UI code (e.g. login handler) to avoid jank.
-  static Future<String> hashPinAsync(String rawPin) =>
-      compute(_hashPinIsolate, rawPin);
+  static bool _isBcrypt(String hash) => hash.startsWith(r'$2');
 
-  // Top-level function required by compute() — no closures.
-  static String _hashPinIsolate(String rawPin) => hashPin(rawPin);
+  /// True for hashes written by older versions, which should be replaced
+  /// with bcrypt once the plain value is known (i.e. after a correct entry).
+  static bool needsRehash(String storedHash) => !_isBcrypt(storedHash);
 
-  /// Verify if a raw PIN matches a stored hash.
+  // ── PINs ───────────────────────────────────────────────────────────
+
+  static String hashPin(String rawPin) =>
+      BCrypt.hashpw(rawPin, BCrypt.gensalt(logRounds: pinLogRounds));
+
+  static Future<String> hashPinAsync(String rawPin) => compute(hashPin, rawPin);
+
   static bool verifyPin(String rawPin, String storedHash) {
-    return hashPin(rawPin) == storedHash;
+    if (storedHash.isEmpty) return false;
+    if (_isBcrypt(storedHash)) return _bcryptMatches(rawPin, storedHash);
+    return _constantTimeEquals(_legacyPinHash(rawPin), storedHash);
   }
 
   /// True if [storedHash] is the hash of one of the publicly known
-  /// default PINs seeded on a fresh install.
+  /// default PINs seeded by older versions.
   static bool isDefaultPinHash(String storedHash) =>
-      AppConstants.defaultPins.any((pin) => hashPin(pin) == storedHash);
+      AppConstants.defaultPins.any((pin) => verifyPin(pin, storedHash));
 
-  // ── Password Hashing (staff accounts created by Owner) ─
+  /// Index of the first hash in [hashes] that [rawPin] matches, or -1.
+  /// Runs in a background isolate.
+  static Future<int> findPinMatch(String rawPin, List<String> hashes) =>
+      compute(_findPinMatch, (rawPin, hashes));
 
-  /// Hash a raw password using SHA-256 with a domain-separated salt.
-  /// The "PWD:" prefix prevents cross-domain hash collisions.
-  static String hashPassword(String rawPassword) {
-    const salt = 'ShopPOS_PwdSalt_2026_Ghana';
-    final bytes = utf8.encode('$salt:$rawPassword');
-    final digest = sha256.convert(bytes);
-    return 'PWD:${digest.toString()}';
+  static int _findPinMatch((String, List<String>) args) {
+    final (pin, hashes) = args;
+    for (var i = 0; i < hashes.length; i++) {
+      if (verifyPin(pin, hashes[i])) return i;
+    }
+    return -1;
   }
 
-  /// Verify if a raw password matches a stored password hash.
+  // ── Passwords ──────────────────────────────────────────────────────
+
+  static String hashPassword(String rawPassword) =>
+      BCrypt.hashpw(rawPassword, BCrypt.gensalt(logRounds: passwordLogRounds));
+
+  static Future<String> hashPasswordAsync(String rawPassword) =>
+      compute(hashPassword, rawPassword);
+
   static bool verifyPassword(String rawPassword, String storedHash) {
-    return hashPassword(rawPassword) == storedHash;
+    if (storedHash.isEmpty) return false;
+    if (utf8.encode(rawPassword).length > maxSecretBytes) return false;
+    if (_isBcrypt(storedHash)) return _bcryptMatches(rawPassword, storedHash);
+    return _constantTimeEquals(_legacyPasswordHash(rawPassword), storedHash);
   }
+
+  static Future<bool> verifyPasswordAsync(String rawPassword, String storedHash) =>
+      compute(_verifyPasswordArgs, (rawPassword, storedHash));
+
+  static bool _verifyPasswordArgs((String, String) a) => verifyPassword(a.$1, a.$2);
+
+  // ── Internals ──────────────────────────────────────────────────────
+
+  static bool _bcryptMatches(String raw, String storedHash) {
+    try {
+      return _constantTimeEquals(BCrypt.hashpw(raw, storedHash), storedHash);
+    } catch (_) {
+      return false; // malformed hash or over-long input
+    }
+  }
+
+  static bool _constantTimeEquals(String a, String b) {
+    final x = utf8.encode(a);
+    final y = utf8.encode(b);
+    var diff = x.length ^ y.length;
+    for (var i = 0; i < x.length && i < y.length; i++) {
+      diff |= x[i] ^ y[i];
+    }
+    return diff == 0;
+  }
+
+  /// Salted SHA-256 used before bcrypt; kept only to verify old hashes.
+  static String _legacyPinHash(String rawPin) =>
+      sha256.convert(utf8.encode('ShopPOS_Salt_2026_Ghana:$rawPin')).toString();
+
+  static String _legacyPasswordHash(String rawPassword) =>
+      'PWD:${sha256.convert(utf8.encode('ShopPOS_PwdSalt_2026_Ghana:$rawPassword'))}';
+
+  /// For tests of the upgrade path only.
+  @visibleForTesting
+  static String legacyPinHashForTest(String rawPin) => _legacyPinHash(rawPin);
+
+  @visibleForTesting
+  static String legacyPasswordHashForTest(String raw) => _legacyPasswordHash(raw);
 }

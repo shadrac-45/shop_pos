@@ -94,18 +94,9 @@ class StaffService {
     final trimmed = pin.trim();
     if (trimmed.isEmpty) return false;
 
-    final hashedPin = AuthService.hashPin(trimmed);
-    final matches = await _isar.appUsers
-        .filter()
-        .pinHashEqualTo(hashedPin)
-        .findAll();
-
-    for (final user in matches) {
-      if (excludeUserId == null || user.id != excludeUserId) {
-        return true;
-      }
-    }
-    return false;
+    return await AuthService.findUserByPin(_isar, trimmed,
+            excludeUserId: excludeUserId) !=
+        null;
   }
 
   /// Create a new cashier account with a unique 4-6 digit PIN.
@@ -138,7 +129,7 @@ class StaffService {
       ..name = name.trim()
       ..role = role
       ..isActive = true
-      ..pinHash = AuthService.hashPin(trimmedPin)
+      ..pinHash = await AuthService.hashPinAsync(trimmedPin)
       ..uuid = IdHelpers.newUuid()
       ..updatedAt = DateTime.now();
 
@@ -162,6 +153,7 @@ class StaffService {
 
     user
       ..isActive = false
+      ..credentialVersion += 1
       ..updatedAt = DateTime.now()
       ..isSynced = false;
     await _isar.writeTxn(() async {
@@ -214,7 +206,8 @@ class StaffService {
     }
 
     user
-      ..pinHash = AuthService.hashPin(trimmedPin)
+      ..pinHash = await AuthService.hashPinAsync(trimmedPin)
+      ..credentialVersion += 1
       ..updatedAt = DateTime.now()
       ..isSynced = false;
     await _isar.writeTxn(() async {

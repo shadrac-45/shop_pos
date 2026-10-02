@@ -17,6 +17,7 @@ import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/settings/screens/printer_setup_screen.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 
 class StoreSettingsScreen extends ConsumerStatefulWidget {
@@ -190,11 +191,32 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                   subtitle: 'Recorded after the customer pays by QR code.'),
 
               const SectionLabel('Hardware'),
-              toggle('Receipt printer', _printer, (v) => _printer = v,
-                  subtitle: 'Opens the print dialog after every sale.'),
+              toggle('Print receipt after every sale', _printer, (v) => _printer = v),
               toggle('Barcode scanner', _scanner, (v) => _scanner = v),
-              toggle('Cash drawer', _drawer, (v) => _drawer = v,
-                  subtitle: 'Saved for future use: drawers are not controlled by the app yet.'),
+              toggle('Open cash drawer on cash sales', _drawer, (v) => _drawer = v,
+                  subtitle: 'Needs a Bluetooth printer with the drawer plugged into it.'),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.print_rounded, color: AppColors.primary),
+                title: const Text('Bluetooth receipt printer'),
+                subtitle: Text(ref.watch(storeSettingsProvider).printerName.isEmpty
+                    ? 'None — receipts use the Android print dialog'
+                    : ref.watch(storeSettingsProvider).printerName),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                // The printer screen saves its own switches; pick them up so
+                // Save here doesn't overwrite them with stale values.
+                onTap: () => Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const PrinterSetupScreen()))
+                    .then((_) {
+                  final latest = ref.read(storeSettingsProvider);
+                  if (mounted) {
+                    setState(() {
+                      _printer = latest.printerEnabled;
+                      _drawer = latest.cashDrawerEnabled;
+                    });
+                  }
+                }),
+              ),
 
               const SizedBox(height: AppSpacing.xl),
               ElevatedButton(

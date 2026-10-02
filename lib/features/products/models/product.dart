@@ -45,6 +45,10 @@ class Product {
   DateTime? updatedAt;
   bool isSynced = false;
 
+  /// Photo on this device (absolute path in the app's documents folder).
+  /// Not synced or included in backups.
+  String? imagePath;
+
   @Backlink(to: 'product')
   final IsarLinks<Batch> batches = IsarLinks<Batch>();
 
