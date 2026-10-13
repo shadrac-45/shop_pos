@@ -21,6 +21,7 @@ import 'package:shop_pos/features/auth/models/app_user.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/products/models/stock_movement.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
 
 class InsufficientStockException implements Exception {
   final String productName;
@@ -68,8 +69,9 @@ class InventoryService {
   /// Batches with stock, soonest expiry first.
   static Future<List<Batch>> _stockedBatches(Isar isar, int productId) =>
       isar.batchs
-          .filter()
+          .where()
           .productIdEqualTo(productId)
+          .filter()
           .quantityGreaterThan(0)
           .sortByExpiryDate()
           .findAll();
@@ -89,10 +91,11 @@ class InventoryService {
           .sortByTimestampDesc()
           .findAll();
 
-  /// Products at or below their reorder level (archived ones excluded).
+  /// Products that need restocking — low or out of stock as defined in
+  /// product_status.dart (archived ones excluded).
   /// [products] must have their batches loaded.
   static List<Product> lowStock(Iterable<Product> products) => products
-      .where((p) => !p.isArchived && p.isLowStock)
+      .where((p) => !p.isArchived && p.needsRestock)
       .toList()
     ..sort((a, b) => a.totalStock.compareTo(b.totalStock));
 
@@ -168,7 +171,7 @@ class InventoryService {
     final now = DateTime.now();
     Batch? batch = batchId == null ? null : await isar.batchs.get(batchId);
     batch ??= await isar.batchs
-        .filter()
+        .where()
         .productIdEqualTo(productId)
         .sortByExpiryDateDesc()
         .findFirst();
@@ -216,14 +219,14 @@ class InventoryService {
   static Future<void> _checkUniqueCodes(Isar isar, ProductInput input, {int? excludeId}) async {
     final barcode = input.barcode?.trim();
     if (barcode != null && barcode.isNotEmpty) {
-      final other = await isar.products.filter().barcodeEqualTo(barcode).findFirst();
+      final other = await isar.products.where().barcodeEqualTo(barcode).findFirst();
       if (other != null && other.id != excludeId) {
         throw ArgumentError('Barcode $barcode is already used by "${other.name}".');
       }
     }
     final sku = input.sku?.trim();
     if (sku != null && sku.isNotEmpty) {
-      final other = await isar.products.filter().skuEqualTo(sku).findFirst();
+      final other = await isar.products.where().skuEqualTo(sku).findFirst();
       if (other != null && other.id != excludeId) {
         throw ArgumentError('SKU $sku is already used by "${other.name}".');
       }
@@ -243,6 +246,7 @@ class InventoryService {
     final now = DateTime.now();
     final product = Product()..uuid = IdHelpers.newUuid();
     _apply(product, input, now);
+    product.modifiedBy = user?.id;
 
     await isar.writeTxn(() async {
       await isar.products.put(product);
@@ -274,6 +278,7 @@ class InventoryService {
     await _checkUniqueCodes(isar, input, excludeId: product.id);
     final before = '${product.name} @ ${product.price}';
     _apply(product, input, DateTime.now());
+    product.modifiedBy = user?.id;
     await isar.writeTxn(() async {
       await isar.products.put(product);
       await isar.activityLogs.put(ActivityLogService.entry(
@@ -294,6 +299,7 @@ class InventoryService {
     product
       ..isArchived = archived
       ..updatedAt = DateTime.now()
+      ..modifiedBy = user?.id
       ..isSynced = false;
     await isar.writeTxn(() async {
       await isar.products.put(product);
@@ -338,6 +344,7 @@ class InventoryService {
         product
           ..costPrice = unitCost
           ..updatedAt = DateTime.now()
+          ..modifiedBy = user?.id
           ..isSynced = false;
         await isar.products.put(product);
       }
@@ -418,7 +425,7 @@ class InventoryService {
       throw ArgumentError.value(countedQuantity, 'countedQuantity');
     }
     final batches = await isar.batchs
-        .filter()
+        .where()
         .productIdEqualTo(product.id)
         .findAll();
     final current = batches.fold<int>(0, (s, b) => s + b.quantity);
@@ -544,13 +551,13 @@ class InventoryService {
     await _touchProduct(isar, batch.productId, now);
   }
 
-  /// Re-saves the product so product watchers refresh stock figures.
+  /// Re-saves the product so product watchers refresh stock figures. The
+  /// product itself didn't change, so it isn't queued for sync or given a
+  /// newer edit time (that would let a stale local price beat a newer
+  /// price change made on another till).
   static Future<void> _touchProduct(Isar isar, int productId, DateTime now) async {
     final product = await isar.products.get(productId);
     if (product == null) return;
-    product
-      ..updatedAt = now
-      ..isSynced = false;
     await isar.products.put(product);
   }
 

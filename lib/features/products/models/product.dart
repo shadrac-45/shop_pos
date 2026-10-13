@@ -43,6 +43,10 @@ class Product {
   bool isArchived = false;
 
   DateTime? updatedAt;
+
+  /// Local user id of whoever last changed this product (sync sends the
+  /// change as that person).
+  int? modifiedBy;
   bool isSynced = false;
 
   /// Photo on this device (absolute path in the app's documents folder).
@@ -84,6 +88,6 @@ class Product {
       .where((b) => b.quantity > 0 && !b.isExpired)
       .fold(0, (sum, b) => sum + b.quantity);
 
-  @ignore
-  bool get isLowStock => reorderLevel > 0 && totalStock <= reorderLevel;
+  // Stock and expiry *state* (low stock, expiring soon, …) lives in
+  // product_status.dart, the single source of truth for those rules.
 }

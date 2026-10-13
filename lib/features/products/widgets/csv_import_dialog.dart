@@ -32,6 +32,7 @@ import 'package:shop_pos/features/products/widgets/import/import_file_card.dart'
 import 'package:shop_pos/features/products/widgets/import/import_filter_bar.dart';
 import 'package:shop_pos/features/products/widgets/import/import_row_tile.dart';
 import 'package:shop_pos/features/products/widgets/import/import_summary_chips.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 class CsvImportDialog extends ConsumerStatefulWidget {
   const CsvImportDialog({super.key});
@@ -125,7 +126,7 @@ class _CsvImportDialogState extends ConsumerState<CsvImportDialog>
     final skipped = state.skippedCount;
     final total = state.totalCount;
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
@@ -182,7 +183,7 @@ class _CsvImportDialogState extends ConsumerState<CsvImportDialog>
     final valid = state.validCount;
     final issues = state.issueCount;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Import $valid valid item${valid == 1 ? '' : 's'}?'),

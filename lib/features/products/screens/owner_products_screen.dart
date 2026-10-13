@@ -20,7 +20,6 @@ import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/auth/permissions.dart';
-import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/screens/stock_history_screen.dart';
@@ -31,13 +30,13 @@ import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/products/providers/product_provider.dart';
 import 'package:shop_pos/features/products/services/csv_import_service.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
-import 'package:shop_pos/core/utils/expiry_helpers.dart';
 import 'package:shop_pos/features/products/widgets/add_product_dialog.dart';
 import 'package:shop_pos/features/products/widgets/csv_import_dialog.dart';
 import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
@@ -45,6 +44,9 @@ import 'package:shop_pos/features/shared/widgets/app_skeleton.dart';
 import 'package:shop_pos/features/products/widgets/edit_product_dialog.dart';
 import 'package:shop_pos/features/products/widgets/restock_batch_dialog.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
+import 'package:shop_pos/features/products/widgets/product_status_badges.dart';
 
 class OwnerProductsScreen extends ConsumerStatefulWidget {
   const OwnerProductsScreen({super.key});
@@ -53,19 +55,19 @@ class OwnerProductsScreen extends ConsumerStatefulWidget {
   ConsumerState<OwnerProductsScreen> createState() => _OwnerProductsScreenState();
 }
 
-enum _ProductFilter { all, lowStock, expiring, archived }
+enum _ProductFilter { all, lowStock, outOfStock, expiring, expired, archived }
 
 class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   int _expandedProductId = -1;
   _ProductFilter _filter = _ProductFilter.all;
 
-  static bool _isExpiring(Product p) => p.batches.any(
-      (b) => b.quantity > 0 && b.daysUntilExpiry <= AppConstants.expiryUrgentDays);
-
+  // Rules live in product_status.dart, shared with the till and alerts.
   bool _matchesFilter(Product p, _ProductFilter f) => switch (f) {
         _ProductFilter.all => !p.isArchived,
-        _ProductFilter.lowStock => !p.isArchived && p.isLowStock,
-        _ProductFilter.expiring => !p.isArchived && _isExpiring(p),
+        _ProductFilter.lowStock => !p.isArchived && p.health.stock == StockLevel.low,
+        _ProductFilter.outOfStock => !p.isArchived && p.health.stock == StockLevel.out,
+        _ProductFilter.expiring => !p.isArchived && p.health.shelfExpiry == ExpiryState.soon,
+        _ProductFilter.expired => !p.isArchived && p.health.shelfExpiry == ExpiryState.expired,
         _ProductFilter.archived => p.isArchived,
       };
 
@@ -75,7 +77,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   }
 
   void _showAdjust(Product product) {
-    showDialog<bool>(
+    showAppDialog<bool>(
       context: context,
       builder: (_) => StockAdjustDialog(product: product),
     ).then((_) => _refreshProduct(product));
@@ -151,7 +153,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   }
 
   void _showAddProduct() {
-    showDialog(
+    showAppDialog(
       context: context,
       builder: (_) => const AddProductDialog(),
     ).then((_) {
@@ -173,7 +175,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   }
 
   void _showRestockBatch(Product product) {
-    showDialog(
+    showAppDialog(
       context: context,
       builder: (_) => RestockBatchDialog(product: product),
     ).then((_) {
@@ -197,12 +199,11 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
     final canManage = Permissions.can(currentUser, Permission.manageProducts);
 
     return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(currentUser?.name ?? 'Owner', canManage),
-            _buildSearchBar(),
+            _buildHeader(canManage),
             _buildFilterChips(productsAsync.valueOrNull ?? const []),
             Expanded(
               child: productsAsync.when(
@@ -222,9 +223,11 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                       title: 'Nothing here',
                       description: switch (_filter) {
                         _ProductFilter.lowStock =>
-                          'No product is at or below its low-stock level. Set a level in Edit Product.',
+                          'No product is below $kLowStockBelow units (or its own reorder level).',
+                        _ProductFilter.outOfStock => 'Every product has sellable stock.',
                         _ProductFilter.expiring =>
-                          'No stock expires within ${AppConstants.expiryUrgentDays} days.',
+                          'No stock expires within $kExpiringSoonDays days.',
+                        _ProductFilter.expired => 'No expired stock on the shelf.',
                         _ => 'No archived products.',
                       },
                       actionLabel: 'Show all',
@@ -249,7 +252,8 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
           ],
         ),
       ),
-      floatingActionButton: !canManage
+      floatingActionButton: !canManage ||
+              MediaQuery.sizeOf(context).width >= AppBreakpoints.rail
           ? null
           : FloatingActionButton.extended(
               onPressed: _showAddProduct,
@@ -276,10 +280,11 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
             _filter = f;
             _expandedProductId = -1;
           }),
-          selectedColor: color ?? AppColors.primary,
+          selectedColor: AppColors.primary,
+          side: BorderSide(color: selected ? AppColors.primary : AppColors.border),
           labelStyle: TextStyle(
             color: selected
-                ? Colors.white
+                ? AppColors.textOnPrimary
                 : (n > 0 && color != null ? color : AppColors.textPrimary),
             fontWeight: FontWeight.w600,
           ),
@@ -290,91 +295,65 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, 0),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, 0, AppSpacing.md, AppSpacing.xs),
       child: Row(
         children: [
           chip(_ProductFilter.all, 'All'),
-          chip(_ProductFilter.lowStock, 'Low stock', color: AppColors.warning),
-          chip(_ProductFilter.expiring, 'Expiring', color: AppColors.danger),
-          chip(_ProductFilter.archived, 'Archived', color: AppColors.textSecondary),
+          chip(_ProductFilter.lowStock, 'Low stock', color: AppColors.warningDarkText),
+          chip(_ProductFilter.outOfStock, 'Out of stock', color: AppColors.dangerDarkText),
+          chip(_ProductFilter.expiring, 'Expiring soon', color: AppColors.warningDarkText),
+          chip(_ProductFilter.expired, 'Expired', color: AppColors.dangerDarkText),
+          chip(_ProductFilter.archived, 'Archived'),
         ],
       ),
     );
   }
 
-  Widget _buildHeader(String ownerName, bool canManage) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
-      decoration: const BoxDecoration(
-        color: AppColors.cardBg,
-        border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
-      ),
-      // The header adapts to the width it is actually given rather than
-      // assuming a tablet. On a 360dp phone the avatar, the title and
-      // two full-width buttons do not fit, so the action collapses to an
-      // icon that still meets the 48dp touch minimum.
+  /// Search with the catalogue actions beside it. The shell already
+  /// titles the page, so there is no separate header bar. On wide screens
+  /// "Add product" lives here as the primary button; phones keep the FAB.
+  Widget _buildHeader(bool canManage) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.sm),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 400;
-
+          final compact = constraints.maxWidth < 560;
           return Row(
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.15),
-                  borderRadius: AppSpacing.borderMd,
-                ),
-                child: const Icon(Icons.inventory_2_rounded, color: AppColors.primary, size: 24),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      ownerName,
-                      style: Theme.of(context).textTheme.titleLarge,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              Expanded(child: _buildSearchBar()),
+              if (canManage) ...[
+                const SizedBox(width: AppSpacing.sm),
+                if (compact)
+                  IconButton(
+                    onPressed: _showImportCsvDialog,
+                    tooltip: 'Import CSV / Excel',
+                    icon: const Icon(Icons.file_upload_outlined, size: 22),
+                    style: IconButton.styleFrom(
+                      backgroundColor: AppColors.cardBg,
+                      foregroundColor: AppColors.textPrimary,
+                      side: const BorderSide(color: AppColors.border),
+                      minimumSize: const Size(52, 52),
                     ),
-                    const Text(
-                      'Inventory & Stock Management',
-                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                  )
+                else ...[
+                  OutlinedButton.icon(
+                    onPressed: _showImportCsvDialog,
+                    icon: const Icon(Icons.file_upload_outlined, size: 20),
+                    label: const Text('Import'),
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52)),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  ElevatedButton.icon(
+                    onPressed: _showAddProduct,
+                    icon: const Icon(Icons.add_rounded, size: 22),
+                    label: const Text('Add product'),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(0, 52),
+                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              if (!canManage)
-                const SizedBox.shrink()
-              else if (compact)
-                IconButton(
-                  onPressed: _showImportCsvDialog,
-                  tooltip: 'Import CSV / Excel',
-                  icon: const Icon(Icons.file_upload_outlined, size: 20),
-                  color: AppColors.primary,
-                  style: IconButton.styleFrom(
-                    side: const BorderSide(color: AppColors.primary),
-                    minimumSize: const Size(AppTouch.minTargetSize, AppTouch.minTargetSize),
                   ),
-                )
-              else
-                OutlinedButton.icon(
-                  onPressed: _showImportCsvDialog,
-                  icon: const Icon(Icons.file_upload_outlined, size: 18),
-                  label: const Text('Import CSV / Excel'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    side: const BorderSide(color: AppColors.primary),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    minimumSize: const Size(0, AppTouch.minTargetSize),
-                  ),
-                ),
+                ],
+              ],
             ],
           );
         },
@@ -383,25 +362,23 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   }
 
   Widget _buildSearchBar() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xs),
-      child: TextField(
-        controller: _searchController,
-        onChanged: (value) => setState(() => _searchQuery = value),
-        style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
-        decoration: InputDecoration(
-          hintText: 'Search product catalog...',
-          prefixIcon: const Icon(Icons.search_rounded, color: AppColors.textSecondary),
-          suffixIcon: _searchQuery.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear_rounded, color: AppColors.textSecondary, size: 20),
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() => _searchQuery = '');
-                  },
-                )
-              : null,
-        ),
+    return TextField(
+      controller: _searchController,
+      onChanged: (value) => setState(() => _searchQuery = value),
+      style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+      decoration: InputDecoration(
+        hintText: 'Search products or categories…',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: _searchQuery.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.close_rounded, size: 20),
+                tooltip: 'Clear search',
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() => _searchQuery = '');
+                },
+              )
+            : null,
       ),
     );
   }
@@ -512,25 +489,15 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isTablet = AppBreakpoints.isTablet(constraints.maxWidth);
-
-        if (isTablet) {
-          return GridView.builder(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 100),
-            physics: const BouncingScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: AppSpacing.sm,
-              mainAxisSpacing: AppSpacing.sm,
-              childAspectRatio: 3.5,
-            ),
-            itemCount: products.length,
-            itemBuilder: (context, index) => _buildProductTile(products[index]),
-          );
-        }
+        // One column, capped in width: tiles expand in place to show
+        // batches, which a fixed-ratio grid cell cannot hold.
+        final side = constraints.maxWidth > 1000
+            ? (constraints.maxWidth - 1000) / 2
+            : AppSpacing.md;
+        final wide = constraints.maxWidth >= AppBreakpoints.rail;
 
         return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 100),
+          padding: EdgeInsets.fromLTRB(side, AppSpacing.sm, side, wide ? AppSpacing.xl : 100),
           physics: const BouncingScrollPhysics(),
           itemCount: products.length,
           itemBuilder: (context, index) => _buildProductTile(products[index]),
@@ -550,9 +517,8 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
   }
 
   Widget _buildProductTile(Product product) {
+    final health = product.health;
     final isExpanded = _expandedProductId == product.id;
-    final expiryColor = ExpiryHelpers.getColor(product.daysUntilExpiry);
-    final expiryIcon = ExpiryHelpers.getIcon(product.daysUntilExpiry);
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -578,7 +544,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                   height: 44,
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
-                    color: Color(product.quickButtonColor),
+                    color: AppColors.surfaceBg,
                     borderRadius: AppSpacing.borderMd,
                   ),
                   child: ProductImageService.exists(product.imagePath)
@@ -587,9 +553,9 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                     child: Text(
                       _avatarInitial(product.name),
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: AppColors.textMuted,
                         fontSize: 18,
-                        fontWeight: FontWeight.w900,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ),
@@ -615,11 +581,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                           Flexible(
                             child: Text(
                               CurrencyHelpers.formatCompact(product.price),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.primary,
-                              ),
+                              style: AppText.money(size: 14, weight: FontWeight.w700),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -627,16 +589,15 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                           const SizedBox(width: AppSpacing.md),
                           Flexible(
                             child: Text(
-                              'Stock: ${product.totalStock.toInt()}'
-                              '${product.isLowStock ? ' · LOW' : ''}',
+                              'Stock: ${health.sellable}'
+                              '${health.expiredUnits > 0 ? ' (+${health.expiredUnits} expired)' : ''}',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: product.isLowStock
-                                    ? AppColors.warning
-                                    : AppColors.textSecondary,
-                                fontWeight: product.isLowStock
-                                    ? FontWeight.w700
-                                    : FontWeight.normal,
+                                color: stockTextColor(health.stock),
+                                fontWeight: health.stock == StockLevel.normal
+                                    ? FontWeight.normal
+                                    : FontWeight.w700,
+                                fontFeatures: AppText.tabular,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -644,43 +605,35 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
                           ),
                         ],
                       ),
-                      if (product.batches.any((b) => b.quantity > 0 && b.isExpired))
-                        const Padding(
-                          padding: EdgeInsets.only(top: 2),
-                          child: Text(
-                            'Has expired stock – write it off',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.danger,
-                            ),
+                      if (hasProductAlert(product))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: ProductStatusBadges(product: product),
+                        ),
+                    ],
+                  ),
+                ),
+                // Next expiry as quiet information; alerts are the badges.
+                if (health.daysToNextExpiry != null &&
+                    health.shelfExpiry == ExpiryState.normal)
+                  Padding(
+                    padding: const EdgeInsets.only(left: AppSpacing.sm),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.schedule_rounded, size: 14, color: AppColors.textMuted),
+                        const SizedBox(width: 3),
+                        Text(
+                          '${health.daysToNextExpiry}d',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                            fontFeatures: AppText.tabular,
                           ),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: expiryColor.withValues(alpha: 0.15),
-                    borderRadius: AppSpacing.borderSm,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(expiryIcon, size: 14, color: expiryColor),
-                      const SizedBox(width: 4),
-                      Text(
-                        ExpiryHelpers.getChipText(product.daysUntilExpiry),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: expiryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 const SizedBox(width: AppSpacing.xs),
                 AnimatedRotation(
                   turns: isExpanded ? 0.5 : 0.0,
@@ -724,7 +677,7 @@ class _OwnerProductsScreenState extends ConsumerState<OwnerProductsScreen> {
           action('Adjust Stock', Icons.tune_rounded, () => _showAdjust(product)),
         if (Permissions.can(user, Permission.manageProducts))
           action('Edit', Icons.edit_rounded, () {
-            showDialog(
+            showAppDialog(
               context: context,
               builder: (_) => EditProductDialog(product: product),
             ).then((_) => ref.invalidate(productServiceProvider));

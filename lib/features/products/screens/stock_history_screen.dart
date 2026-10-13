@@ -38,7 +38,6 @@ class StockHistoryScreen extends ConsumerWidget {
       backgroundColor: AppColors.scaffoldBg,
       appBar: AppBar(
         title: Text('Stock history — ${product.name}'),
-        backgroundColor: AppColors.cardBg,
       ),
       body: FutureBuilder(
         future: _load(isar),

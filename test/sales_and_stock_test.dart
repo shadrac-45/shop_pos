@@ -26,6 +26,7 @@ import 'package:shop_pos/features/expenses/models/expense.dart';
 import 'package:shop_pos/features/expenses/services/expense_service.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
 import 'package:shop_pos/features/products/models/stock_movement.dart';
 import 'package:shop_pos/features/products/services/inventory_service.dart';
 import 'package:shop_pos/features/reports/services/report_csv.dart';
@@ -225,8 +226,90 @@ void main() {
       await _product('Salt', 10, reorderLevel: 5, batches: [(30, 100)]);
       final soon = await _product('Fish', 10, batches: [(3, 2)]);
       final alerts = await StockAlertService.check(isar);
-      expect(alerts.lowStock.map((p) => p.id), [low.id]);
+      // Fish has 3 units: under 5, so it is low stock as well as expiring.
+      expect(alerts.lowStock.map((p) => p.id), [low.id, soon.id]);
       expect(alerts.expiringSoon.map((p) => p.id), [soon.id]);
+    });
+
+    group('product status rules', () {
+      Future<Product> loaded(Product p) async {
+        final fresh = (await isar.products.get(p.id))!;
+        await fresh.batches.load();
+        return fresh;
+      }
+
+      test('stock: 5 normal, 4..1 low, 0 out', () async {
+        for (final (units, level) in [
+          (6, StockLevel.normal),
+          (5, StockLevel.normal),
+          (4, StockLevel.low),
+          (3, StockLevel.low),
+          (2, StockLevel.low),
+          (1, StockLevel.low),
+        ]) {
+          final p = await loaded(await _product('S$units', 1, batches: [(units, 365)]));
+          expect(p.stockLevel, level, reason: '$units units');
+        }
+        final none = await loaded(await _product('None', 1));
+        expect(none.stockLevel, StockLevel.out);
+        expect(none.needsRestock, isTrue);
+      });
+
+      test('an owner reorder level can raise the low threshold', () async {
+        final p = await loaded(await _product('Rice', 1, reorderLevel: 10, batches: [(8, 365)]));
+        expect(p.stockLevel, StockLevel.low);
+      });
+
+      test('expiry: >31 normal, 31..1 expiring soon, passed expired', () async {
+        for (final (days, state) in [
+          (60, ExpiryState.normal),
+          (32, ExpiryState.normal),
+          (31, ExpiryState.soon),
+          (20, ExpiryState.soon),
+          (1, ExpiryState.soon),
+          (-2, ExpiryState.expired),
+        ]) {
+          final p = await loaded(await _product('E$days', 1, batches: [(10, days)]));
+          expect(p.expiryState, state, reason: '$days days');
+        }
+      });
+
+      test('under a day left counts as expired (same rule that blocks the sale)', () async {
+        final p = await loaded(await _product('Today', 1, batches: [(6, 0)]));
+        expect(p.expiryState, ExpiryState.expired);
+        expect(p.stockLevel, StockLevel.out);
+      });
+
+      test('empty batches are ignored, even when past their date', () async {
+        final p = await loaded(await _product('Empty', 1, batches: [(0, -5), (10, 200)]));
+        expect(p.expiryState, ExpiryState.normal);
+        expect(p.expiredUnits, 0);
+        expect(p.stockLevel, StockLevel.normal);
+      });
+
+      test('the cached UI snapshot agrees with the rule getters', () async {
+        final p = await loaded(await _product('Snap', 1, batches: [(2, -1), (3, 12)]));
+        final h = p.health;
+        expect(h.stock, p.stockLevel);
+        expect(h.shelfExpiry, p.expiryState);
+        expect(h.tillExpiry, p.sellableExpiryState);
+        expect(h.sellable, 3);
+        expect(h.expiredUnits, 2);
+        expect(h.daysToNextExpiry, 12);
+        expect(identical(p.health, h), isTrue, reason: 'computed once per object');
+      });
+
+      test('till view ignores expired leftovers while fresh stock remains', () async {
+        final p = await loaded(await _product('Mixed', 1, batches: [(3, -2), (10, 200)]));
+        expect(p.expiryState, ExpiryState.expired); // shelf needs a write-off
+        expect(p.sellableExpiryState, ExpiryState.normal); // still sellable
+        expect(p.expiredUnits, 3);
+        expect(p.stockLevel, StockLevel.normal); // 10 sellable
+
+        final gone = await loaded(await _product('Gone', 1, batches: [(4, -2)]));
+        expect(gone.stockLevel, StockLevel.out);
+        expect(gone.sellableExpiryState, ExpiryState.expired);
+      });
     });
 
     test('archived products cannot be restocked into the till list', () async {
@@ -445,7 +528,11 @@ void main() {
       expect(Permissions.can(clerk, Permission.sell), isFalse);
       expect(Permissions.can(clerk, Permission.adjustStock), isTrue);
       expect(Permissions.can(manager, Permission.viewReports), isTrue);
-      expect(Permissions.can(manager, Permission.manageStaff), isFalse);
+      // Managers manage cashiers/stock clerks (StaffService limits roles);
+      // only owners add shops.
+      expect(Permissions.can(manager, Permission.manageStaff), isTrue);
+      expect(Permissions.can(manager, Permission.manageShops), isFalse);
+      expect(Permissions.can(owner, Permission.manageShops), isTrue);
       expect(Permissions.can(owner, Permission.manageSettings), isTrue);
       expect(Permissions.can(null, Permission.sell), isFalse);
       owner.isActive = false;

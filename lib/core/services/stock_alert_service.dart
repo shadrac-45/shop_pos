@@ -11,15 +11,15 @@ import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/services/notification_service.dart';
 import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
 
 class StockAlerts {
   final List<Product> lowStock;
 
-  /// Products with stock in a batch that expires within
-  /// [AppConstants.expiryUrgentDays] (or has already expired).
+  /// Products with stock expiring within [kExpiringSoonDays] days, or
+  /// already expired (see product_status.dart).
   final List<Product> expiringSoon;
 
   const StockAlerts({required this.lowStock, required this.expiringSoon});
@@ -30,11 +30,9 @@ class StockAlerts {
   static StockAlerts from(Iterable<Product> products) {
     final active = products.where((p) => !p.isArchived).toList();
     return StockAlerts(
-      lowStock: active.where((p) => p.isLowStock).toList(),
-      expiringSoon: active
-          .where((p) => p.batches.any((b) =>
-              b.quantity > 0 && b.daysUntilExpiry <= AppConstants.expiryUrgentDays))
-          .toList(),
+      // Low or out of stock: both need restocking.
+      lowStock: active.where((p) => p.needsRestock).toList(),
+      expiringSoon: active.where((p) => p.expiryState != ExpiryState.normal).toList(),
     );
   }
 

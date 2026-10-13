@@ -12,11 +12,11 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shop_pos/features/products/services/product_image_service.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
@@ -33,7 +33,6 @@ abstract class BaseProductDialog extends ConsumerStatefulWidget {
 /// Provides shared helpers:
 ///   - [buildLabel] — section label text
 ///   - [inputDecoration] — consistent dark-theme input styling
-///   - [buildColorPicker] — animated color-swatch selector
 ///   - [buildDialogButtons] — cancel + submit action row
 ///
 /// Concrete subclasses must implement:
@@ -80,9 +79,7 @@ abstract class BaseProductDialogState<T extends BaseProductDialog>
       if (path != null && mounted) setState(() => imagePath = path);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not get the photo: $e')),
-        );
+        context.showErrorSnackbar('Could not get the photo: $e');
       }
     }
   }
@@ -240,46 +237,6 @@ abstract class BaseProductDialogState<T extends BaseProductDialog>
       ),
       contentPadding:
           const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    );
-  }
-
-  /// Animated color-swatch picker.
-  ///
-  /// [selectedIndex] — index of the currently selected color.
-  /// [onSelect] — called with the new index when a swatch is tapped.
-  Widget buildColorPicker({
-    required int selectedIndex,
-    required void Function(int index) onSelect,
-  }) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: List.generate(AppConstants.quickButtonPalette.length, (index) {
-        final color = AppConstants.quickButtonPalette[index];
-        final isSelected = selectedIndex == index;
-        return GestureDetector(
-          onTap: () => onSelect(index),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isSelected ? Colors.white : Colors.transparent,
-                width: 3,
-              ),
-              boxShadow: isSelected
-                  ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 8)]
-                  : null,
-            ),
-            child: isSelected
-                ? const Icon(Icons.check_rounded, color: Colors.white, size: 18)
-                : null,
-          ),
-        );
-      }),
     );
   }
 

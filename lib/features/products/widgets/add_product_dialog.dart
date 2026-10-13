@@ -42,7 +42,6 @@ class _AddProductDialogState
   final _noteController = TextEditingController();
 
   // ── Local state ───────────────────────────────────────────────────
-  int _selectedColorIndex = 0;
   DateTime _selectedExpiry = DateTime.now().add(const Duration(days: 90));
 
   @override
@@ -139,15 +138,6 @@ class _AddProductDialogState
 
       const SizedBox(height: 14),
 
-      // Color picker (inherited from base)
-      buildLabel('Button Color'),
-      const SizedBox(height: 8),
-      buildColorPicker(
-        selectedIndex: _selectedColorIndex,
-        onSelect: (index) => setState(() => _selectedColorIndex = index),
-      ),
-
-      const SizedBox(height: 14),
       buildLabel('Photo (optional)'),
       const SizedBox(height: 6),
       buildImagePicker(),
@@ -274,8 +264,8 @@ class _AddProductDialogState
           name: productName,
           price: double.parse(_priceController.text.trim()),
           category: _categoryController.text,
-          quickButtonColor:
-              AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32(),
+          // Legacy per-product colour: no longer shown; stored for sync.
+          quickButtonColor: AppConstants.quickButtonPalette.first.toARGB32(),
           costPrice: costValue,
           barcode: barcodeController.text,
           sku: skuController.text,

@@ -18,7 +18,7 @@ final productServiceProvider = StreamProvider<List<Product>>((ref) async* {
         await p.batches.load();
         if (p.batches.isEmpty) {
           final matchingBatches =
-              await isar.batchs.filter().productIdEqualTo(p.id).findAll();
+              await isar.batchs.where().productIdEqualTo(p.id).findAll();
           if (matchingBatches.isNotEmpty) {
             for (final b in matchingBatches) {
               p.batches.add(b);
@@ -57,15 +57,10 @@ final productServiceProvider = StreamProvider<List<Product>>((ref) async* {
   yield* controller.stream;
 });
 
-final productByIdProvider = Provider.family<Product?, int>((ref, id) {
-  final isar = ref.watch(isarProvider);
-  return isar.products.getSync(id);
-});
-
 /// On-demand, paginated batch loader for a specific product ID.
 /// Uses the indexed [Batch.productId] B-tree index for sub-millisecond lookups.
 final productBatchesProvider =
     FutureProvider.family<List<Batch>, int>((ref, productId) async {
   final isar = ref.watch(isarProvider);
-  return await isar.batchs.filter().productIdEqualTo(productId).findAll();
+  return await isar.batchs.where().productIdEqualTo(productId).findAll();
 });

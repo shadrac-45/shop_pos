@@ -13,7 +13,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/features/products/models/product.dart';
@@ -42,9 +41,6 @@ class _EditProductDialogState
   late TextEditingController _priceController;
   late TextEditingController _categoryController;
 
-  // ── Local state ───────────────────────────────────────────────────
-  late int _selectedColorIndex;
-
   @override
   void initState() {
     super.initState();
@@ -54,10 +50,6 @@ class _EditProductDialogState
         TextEditingController(text: product.price.toString());
     _categoryController = TextEditingController(text: product.category);
 
-    // Find the matching palette index for the stored color value.
-    final matchingIndex = AppConstants.quickButtonPalette
-        .indexWhere((c) => c.toARGB32() == product.quickButtonColor);
-    _selectedColorIndex = matchingIndex >= 0 ? matchingIndex : 0;
     loadInventoryFields(product);
   }
 
@@ -153,15 +145,6 @@ class _EditProductDialogState
 
       const SizedBox(height: 14),
 
-      // Color picker (inherited from base)
-      buildLabel('Button Color'),
-      const SizedBox(height: 8),
-      buildColorPicker(
-        selectedIndex: _selectedColorIndex,
-        onSelect: (index) => setState(() => _selectedColorIndex = index),
-      ),
-
-      const SizedBox(height: 14),
       buildLabel('Photo'),
       const SizedBox(height: 6),
       buildImagePicker(),
@@ -190,8 +173,8 @@ class _EditProductDialogState
           name: _nameController.text,
           price: double.parse(_priceController.text.trim()),
           category: _categoryController.text,
-          quickButtonColor:
-              AppConstants.quickButtonPalette[_selectedColorIndex].toARGB32(),
+          // No longer shown or picked; keep the stored value as it is.
+          quickButtonColor: widget.product.quickButtonColor,
           costPrice: costValue,
           barcode: barcodeController.text,
           sku: skuController.text,

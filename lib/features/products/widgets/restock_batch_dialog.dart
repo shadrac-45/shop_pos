@@ -19,6 +19,7 @@ import 'package:shop_pos/features/auth/models/app_user.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/core/utils/hash_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 class RestockBatchDialog extends ConsumerStatefulWidget {
   final Product product;
@@ -103,7 +104,7 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
     bool isVerifying = false;
     String? errorMsg;
 
-    return showDialog<bool>(
+    return showAppDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
@@ -229,10 +230,10 @@ class _RestockBatchDialogState extends ConsumerState<RestockBatchDialog> {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: Color(widget.product.quickButtonColor),
+                      color: AppColors.primaryLight,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(Icons.add_box_rounded, color: Colors.white, size: 22),
+                    child: const Icon(Icons.add_box_rounded, color: AppColors.primaryDark, size: 22),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
