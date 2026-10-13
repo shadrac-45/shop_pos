@@ -90,6 +90,23 @@ class StoreSettings {
   /// When the cloud shop settings were last applied here.
   DateTime? cloudShopUpdatedAt;
 
+  String cloudBusinessId = '';
+
+  /// This till's code in its shop (T1, T2, …), assigned by the cloud.
+  String cloudDeviceCode = '';
+
+  /// Last receipt number used on this till (with [cloudDeviceCode]).
+  int receiptSeq = 0;
+
+  /// What the last pull covered: 'full' (manager/owner) or 'limited'
+  /// (cashier). A full-scope person signing in re-downloads everything.
+  String cloudCursorScope = '';
+
+  /// Shop settings changed on this till and not yet uploaded.
+  bool settingsSynced = true;
+  DateTime? settingsUpdatedAt;
+  int? settingsModifiedBy;
+
   DateTime? lastSyncAt;
   DateTime? lastBackupAt;
 

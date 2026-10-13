@@ -10,6 +10,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:isar/isar.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/database/database_provider.dart';
@@ -23,8 +24,10 @@ import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/features/activity/models/activity_log.dart';
 import 'package:shop_pos/features/activity/services/activity_log_service.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/cloud/widgets/shop_picker.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/magic/border_beam.dart';
 
 class CloudSection extends ConsumerStatefulWidget {
   const CloudSection({super.key});
@@ -73,10 +76,13 @@ class _CloudSectionState extends ConsumerState<CloudSection> {
       _errorField = null;
     });
     final isar = ref.read(isarProvider);
-    final result = _createShop
-        ? await CloudService.createShop(isar,
-            url: url, email: _email.text, password: _password.text, signupCode: _code.text)
-        : await CloudService.signIn(isar, url: url, email: _email.text, password: _password.text);
+    final CloudConnectResult result;
+    if (_createShop) {
+      result = await CloudService.createShop(isar,
+          url: url, email: _email.text, password: _password.text, signupCode: _code.text);
+    } else {
+      result = await _join(isar, url);
+    }
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -91,6 +97,25 @@ class _CloudSectionState extends ConsumerState<CloudSection> {
     if (!mounted) return;
     context.showSuccessSnackbar('Connected to ${result.shopName}. Uploading this till\'s records…');
     await ref.read(syncProvider.notifier).syncNow();
+  }
+
+  /// Joins one of the signed-in person's shops; they become the person
+  /// signed in on this till.
+  Future<CloudConnectResult> _join(Isar isar, String url) async {
+    final login = await CloudService.login(url: url, identifier: _email.text, password: _password.text);
+    if (!login.ok) return CloudConnectResult.failed(login.error!, field: login.field);
+    if (!mounted) return const CloudConnectResult.failed('Cancelled.');
+    final shop = await pickShop(context, login.shops);
+    if (shop == null) return const CloudConnectResult.failed('Choose a shop to join.');
+    try {
+      final user = await CloudService.joinShop(isar, login, shop.id);
+      ref.read(currentUserProvider.notifier).setUser(user);
+      return CloudConnectResult.ok(shop.name);
+    } on CloudJoinException catch (e) {
+      return CloudConnectResult.failed(e.message);
+    } catch (e) {
+      return CloudConnectResult.failed('Could not join: $e');
+    }
   }
 
   Future<void> _disconnect() async {
@@ -245,7 +270,7 @@ class _CloudSectionState extends ConsumerState<CloudSection> {
           controller: _email,
           keyboardType: TextInputType.emailAddress,
           autocorrect: false,
-          decoration: InputDecoration(labelText: 'Owner email', errorText: fieldError('email')),
+          decoration: InputDecoration(labelText: _createShop ? 'Owner email' : 'Email or username', errorText: fieldError('email')),
         ),
         const SizedBox(height: AppSpacing.md),
         TextField(
@@ -310,21 +335,33 @@ class SyncStatusChip extends ConsumerWidget {
     final label = status == SyncStatus.offline && pending > 0
         ? 'Offline · $pending queued'
         : status.label;
+    // Text a step darker than the icon so it clears 4.5:1 on the tint.
+    final textColor = Color.lerp(color, Colors.black, 0.3)!;
+    const radius = BorderRadius.all(Radius.circular(999));
     return Tooltip(
       message: pending > 0 ? '$pending changes waiting to sync' : status.label,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: color),
-            const SizedBox(width: 4),
-            Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
-          ],
+      // The beam runs round the chip only while a sync is in flight.
+      child: BorderBeam(
+        active: status == SyncStatus.syncing,
+        borderRadius: radius,
+        size: 36,
+        duration: const Duration(milliseconds: 1600),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.10),
+            borderRadius: radius,
+            border: Border.all(color: color.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: TextStyle(fontSize: 12, color: textColor, fontWeight: FontWeight.w600)),
+            ],
+          ),
         ),
       ),
     );

@@ -145,7 +145,12 @@ class Sale {
             ..reference = paystackReference,
         ];
 
+  /// Receipt number. Tills connected to ShopPOS Cloud number receipts
+  /// `<till code>-<number>` (e.g. T2-000045), unique across the shop's
+  /// tills; older and offline-only sales keep "R" + local number.
+  String? receiptNo;
+
   /// Short human-readable receipt number.
   @ignore
-  String get receiptNumber => 'R${id.toString().padLeft(6, '0')}';
+  String get receiptNumber => receiptNo ?? 'R${id.toString().padLeft(6, '0')}';
 }

@@ -11,6 +11,7 @@ library;
 import 'dart:convert';
 
 import 'package:isar/isar.dart';
+import 'package:shop_pos/core/models/store_settings.dart';
 
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
@@ -111,7 +112,7 @@ class SaleService {
   }) async {
     if (paystackReference != null) {
       final existing = await isar.sales
-          .filter()
+          .where()
           .paystackReferenceEqualTo(paystackReference)
           .findFirst();
       if (existing != null) return existing;
@@ -199,6 +200,18 @@ class SaleService {
       ]);
 
     await isar.writeTxn(() async {
+      // Cloud tills number receipts "<till code>-<n>": the code is unique in
+      // the shop (assigned by the cloud) and n only ever increases here, so
+      // two tills can never print the same receipt number.
+      final settings = await isar.storeSettings.get(1);
+      if (settings != null && settings.cloudDeviceCode.isNotEmpty) {
+        // Never count on from a corrupt value (see DataMigrations).
+        if (settings.receiptSeq < 0) settings.receiptSeq = 0;
+        settings.receiptSeq += 1;
+        sale.receiptNo =
+            '${settings.cloudDeviceCode}-${settings.receiptSeq.toString().padLeft(6, '0')}';
+        await isar.storeSettings.put(settings);
+      }
       await isar.sales.put(sale);
       final items = <SaleItem>[];
       for (var i = 0; i < lines.length; i++) {
@@ -237,7 +250,7 @@ class SaleService {
   }
 
   static Future<List<SaleItem>> itemsFor(Isar isar, int saleId) =>
-      isar.saleItems.filter().saleIdEqualTo(saleId).findAll();
+      isar.saleItems.where().saleIdEqualTo(saleId).findAll();
 
   /// Cancels a whole sale: all items go back to stock and the full amount
   /// is refunded by the way it was paid. Only for sales with no refunds.

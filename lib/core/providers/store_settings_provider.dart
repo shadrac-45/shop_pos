@@ -47,7 +47,15 @@ class StoreSettingsNotifier extends Notifier<StoreSettings> {
     final isar = ref.read(isarProvider);
     await isar.writeTxn(() async {
       final current = await isar.storeSettings.get(1) ?? StoreSettings();
+      final before = sharedSettingsSignature(current);
       change(current);
+      // Settings shared with the shop's other tills go up on the next sync.
+      if (!system && sharedSettingsSignature(current) != before) {
+        current
+          ..settingsSynced = false
+          ..settingsUpdatedAt = DateTime.now()
+          ..settingsModifiedBy = user?.id;
+      }
       await isar.storeSettings.put(current);
       if (!system) {
         await isar.activityLogs.put(ActivityLogService.entry(
@@ -59,6 +67,12 @@ class StoreSettingsNotifier extends Notifier<StoreSettings> {
     CurrencyHelpers.configure(state.currency);
   }
 }
+
+/// The settings every till of a shop shares (synced with ShopPOS Cloud).
+String sharedSettingsSignature(StoreSettings s) => [
+      s.storeName, s.currency, s.vatRate, s.pricesIncludeTax, s.storePhone, s.storeAddress, s.taxId,
+      s.receiptFooter, s.enableCash, s.enableCard, s.enableMoMo, s.enableQr,
+    ].join('|');
 
 /// VAT settings to apply at checkout.
 final taxConfigProvider = Provider<TaxConfig>((ref) {

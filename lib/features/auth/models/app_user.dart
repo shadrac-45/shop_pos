@@ -47,7 +47,16 @@ class AppUser {
   String? uuid;
 
   DateTime? updatedAt;
+
+  /// Local user id of whoever last changed this account (themselves for a
+  /// PIN change; the owner/manager for staff changes).
+  int? modifiedBy;
   bool isSynced = false;
+
+  /// This person's ShopPOS Cloud session on THIS till (never synced).
+  /// Their changes are uploaded with it, so the cloud knows who made them.
+  String? cloudToken;
+  DateTime? cloudTokenExpiresAt;
 }
 
 /// Application-level uniqueness helpers.
@@ -63,16 +72,6 @@ class AppUserUniqueness {
   }) async {
     final existing =
         await isar.appUsers.filter().usernameEqualTo(username).findFirst();
-    return existing != null && existing.id != excludeId;
-  }
-
-  static Future<bool> isEmailTaken(
-    Isar isar,
-    String email, {
-    int? excludeId,
-  }) async {
-    final existing =
-        await isar.appUsers.filter().emailEqualTo(email).findFirst();
     return existing != null && existing.id != excludeId;
   }
 }

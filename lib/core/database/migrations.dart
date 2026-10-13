@@ -27,6 +27,7 @@ class DataMigrations {
       await _assignUuids(isar);
       await _openingBalances(isar);
       await _ensureDeviceId(isar);
+      await _repairCloudFields(isar);
     } catch (e, st) {
       debugPrint('[Migrations] failed: $e\n$st');
     }
@@ -109,5 +110,49 @@ class DataMigrations {
     if (settings == null || settings.deviceId.isNotEmpty) return;
     settings.deviceId = IdHelpers.newUuid();
     await isar.writeTxn(() => isar.storeSettings.put(settings));
+  }
+
+  /// Settings saved before the ShopPOS Cloud fields existed read Isar's
+  /// "missing" markers for the new non-nullable fields (the smallest int
+  /// for receiptSeq, false for settingsSynced) instead of their defaults.
+  /// That made the first cloud receipts "T1--9223…". Puts the defaults back
+  /// and renumbers any receipts it broke, oldest first, in the same order
+  /// the cloud repair uses.
+  static final _validReceipt = RegExp(r'^T\d+-(\d+)$');
+  static final _brokenReceipt = RegExp(r'^T\d+--');
+
+  static Future<void> _repairCloudFields(Isar isar) async {
+    final settings = await isar.storeSettings.get(1);
+    if (settings == null) return;
+    final broken = (await isar.sales.where().findAll())
+        .where((s) => s.receiptNo != null && _brokenReceipt.hasMatch(s.receiptNo!))
+        .toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final seqBroken = settings.receiptSeq < 0;
+    final flagBroken = !settings.settingsSynced && settings.settingsUpdatedAt == null;
+    if (broken.isEmpty && !seqBroken && !flagBroken) return;
+
+    await isar.writeTxn(() async {
+      final code = settings.cloudDeviceCode;
+      var seq = 0;
+      if (code.isNotEmpty) {
+        for (final s in await isar.sales.where().findAll()) {
+          final m = s.receiptNo == null ? null : _validReceipt.firstMatch(s.receiptNo!);
+          if (m != null && s.receiptNo!.startsWith('$code-')) {
+            final n = int.parse(m.group(1)!);
+            if (n > seq) seq = n;
+          }
+        }
+        for (final s in broken) {
+          seq += 1;
+          s.receiptNo = '$code-${seq.toString().padLeft(6, '0')}';
+          await isar.sales.put(s);
+        }
+      }
+      if (seqBroken || broken.isNotEmpty) settings.receiptSeq = seq < 0 ? 0 : seq;
+      if (flagBroken) settings.settingsSynced = true;
+      await isar.storeSettings.put(settings);
+    });
+    debugPrint('[Migrations] repaired cloud fields (${broken.length} receipts renumbered)');
   }
 }

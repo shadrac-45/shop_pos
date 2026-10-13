@@ -60,7 +60,7 @@ class NotificationService {
       importance: Importance.max,
       priority: Priority.high,
       ticker: 'ticker',
-      color: Color(0xFFF85149), // AppColors.danger
+      color: Color(0xFFB91C1C), // AppColors.danger
     );
 
     const NotificationDetails platformChannelSpecifics =

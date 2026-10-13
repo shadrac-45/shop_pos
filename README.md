@@ -86,8 +86,16 @@ First launch: admin email and password, then the setup wizard (store, tax, payme
 PIN and staff, opening stock, hardware). After that, the role picker offers **Admin / Owner**
 (email and password) or **Staff** (PIN).
 
-Mobile Money and sync need the backend: see [`backend/README.md`](backend/README.md), then enter
-its URL and API key under **Settings → Integrations**.
+Mobile Money and multi-till sync need a server. There are two, and they are not interchangeable:
+
+- **ShopPOS Cloud** (current): the separate `POS-APP/backend` project. A till joins a shop with the
+  owner's or a staff member's sign-in; sync then uses that till's device token plus the signed-in
+  person's session, and the server checks every record against that person's role. A till belongs
+  to the first cloud shop it joins: to use it for another shop, back up, reinstall, and join.
+- **Legacy key-only sync** (kept for existing installs): [`backend/`](backend/README.md) in this
+  repo. Enter its URL and API key under **Settings → Integrations**. Every till shares one key and
+  the server can't tell who sent a change, so prefer ShopPOS Cloud for new shops. The cloud server
+  does not accept key-only sync.
 
 ## Tests
 
@@ -122,7 +130,7 @@ lib/
 │   ├── shared/                      # shared widgets
 │   └── shifts/
 └── main.dart
-backend/                             # Node.js Paystack proxy + sync server (no dependencies)
+backend/                             # LEGACY key-only Paystack proxy + sync server (see above)
 ```
 
 Business rules live in services (`SaleService`, `InventoryService`, `ShiftService`,

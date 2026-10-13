@@ -1,23 +1,30 @@
 /// ============================================
 /// Cloud Service — ShopPOS
 /// ============================================
-/// Connects this till to ShopPOS Cloud (the
-/// backend's /api/auth endpoints):
+/// Identity and till registration with ShopPOS
+/// Cloud (the backend's /api/auth endpoints).
 ///
-///  • createShop: the owner creates the cloud
-///    shop from this till. The till's own owner
-///    account (id and bcrypt PIN hash) becomes
-///    the cloud owner, so local records line up.
-///  • signIn: the owner signs in to an existing
-///    cloud shop to add this till to it.
+///  • createShop: the owner creates the business
+///    and its first shop from this till; the
+///    till's own owner account becomes the cloud
+///    owner, so local records line up.
+///  • login → joinShop: someone signs in with
+///    their own account (email or username +
+///    password), picks one of THEIR shops, and
+///    this till joins it. On a new install this
+///    replaces the setup wizard: no local owner
+///    and no new shop are created.
+///  • passwordSignIn / pinSignIn: people signing
+///    in on a till that already belongs to a
+///    shop. Each person gets their own session
+///    on this till (AppUser.cloudToken); their
+///    changes are uploaded with it.
+///  • signOut: ends that person's session.
 ///
-/// Either way the server returns a device token
-/// for this till, stored in StoreSettings. The
-/// owner's password is sent once over the
-/// connection and never stored; the short-lived
-/// session token is signed out straight away.
-/// No server secret (Paystack key, database
-/// password) is ever sent to the till.
+/// The till stores: its device token (which
+/// shop), each person's session, and their own
+/// bcrypt PIN hash (offline PIN sign-in). No
+/// server secret ever reaches the till.
 /// ============================================
 library;
 
@@ -29,6 +36,7 @@ import 'package:isar/isar.dart';
 
 import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/core/services/sync_service.dart';
+import 'package:shop_pos/core/utils/hash_helpers.dart';
 import 'package:shop_pos/core/utils/id_helpers.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
 
@@ -41,6 +49,41 @@ class CloudConnectResult {
         field = null;
   const CloudConnectResult.failed(this.error, {this.field}) : shopName = null;
   bool get ok => error == null;
+}
+
+/// A shop the signed-in person may work in.
+class CloudShop {
+  final String id;
+  final String name;
+  const CloudShop(this.id, this.name);
+}
+
+/// Result of [CloudService.login]: who signed in and their shops.
+class CloudLogin {
+  final String? error;
+  final String? field;
+  final String token;
+  final Map<String, dynamic> user;
+  final List<CloudShop> shops;
+  final String url;
+  const CloudLogin._(this.error, this.field, this.token, this.user, this.shops, this.url);
+  factory CloudLogin.failed(String error, {String? field}) =>
+      CloudLogin._(error, field, '', const {}, const [], '');
+  bool get ok => error == null;
+}
+
+/// Result of signing in on a till.
+class CloudSignIn {
+  final AppUser? user;
+  final String? error;
+
+  /// True when the cloud couldn't be reached (fall back to offline PIN).
+  final bool offline;
+
+  /// True when the cloud answered "wrong credentials".
+  final bool rejected;
+  const CloudSignIn._(this.user, this.error, {this.offline = false, this.rejected = false});
+  bool get ok => user != null;
 }
 
 class CloudService {
@@ -75,6 +118,70 @@ class CloudService {
       !RegExp(r'^http://(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)')
           .hasMatch(url);
 
+  static Dio _client(String base, {Dio? dio}) =>
+      dio ??
+      Dio(BaseOptions(
+        baseUrl: base,
+        connectTimeout: const Duration(seconds: 15),
+        sendTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 30),
+        validateStatus: (_) => true,
+      ));
+
+  static Future<StoreSettings> _settings(Isar isar) async {
+    final s = await isar.storeSettings.get(1) ?? StoreSettings();
+    if (s.deviceId.isEmpty) {
+      s.deviceId = IdHelpers.newUuid();
+      await isar.writeTxn(() => isar.storeSettings.put(s));
+    }
+    return s;
+  }
+
+  static String _tillName(StoreSettings s) =>
+      s.storeName.isEmpty ? 'ShopPOS till' : '${s.storeName} till';
+
+  /// Creates/updates the local copy of a cloud account and stores its
+  /// session for this till. Server data wins for role/status/name.
+  static Future<AppUser> _upsertUser(Isar isar, Map user,
+      {String? token, String? expiresAt, String? pinHash}) async {
+    final uuid = user['id'] as String;
+    late AppUser local;
+    await isar.writeTxn(() async {
+      final existing = await isar.appUsers.filter().uuidEqualTo(uuid).findFirst();
+      local = existing ??
+          (AppUser()
+            ..uuid = uuid
+            // Unusable until a real PIN hash arrives.
+            ..pinHash = HashHelpers.hashPin(IdHelpers.newUuid())
+            // Older than anything the cloud sends, so pulls update it.
+            ..updatedAt = DateTime.fromMillisecondsSinceEpoch(0)
+            ..isSynced = true);
+      local
+        ..name = user['name'] as String? ?? local.name
+        ..role = user['role'] as String? ?? local.role
+        ..isActive = user['isActive'] != false
+        ..email = user['email'] as String? ?? local.email
+        ..username = user['username'] as String? ?? local.username;
+      final hash = pinHash ?? user['pinHash'] as String?;
+      if (hash != null && hash.startsWith(r'$2') && local.isSynced) local.pinHash = hash;
+      final version = (user['credentialVersion'] as num?)?.toInt();
+      if (version != null && version > local.credentialVersion) local.credentialVersion = version;
+      if (token != null) {
+        local
+          ..cloudToken = token
+          ..cloudTokenExpiresAt = DateTime.tryParse(expiresAt ?? '')?.toLocal();
+      }
+      await isar.appUsers.put(local);
+    });
+    return local;
+  }
+
+  static String _message(Response r, String fallback) {
+    final d = r.data;
+    return d is Map && d['message'] is String ? d['message'] as String : fallback;
+  }
+
+  // ── Create a business (first till) ────────────────────────────────────
   static Future<CloudConnectResult> createShop(
     Isar isar, {
     required String url,
@@ -83,14 +190,16 @@ class CloudService {
     String signupCode = '',
     Dio? dio,
   }) async {
-    final settings = await isar.storeSettings.get(1) ?? StoreSettings();
+    final base = normaliseUrl(url);
+    if (base.isEmpty) {
+      return const CloudConnectResult.failed('That address is not valid. Example: http://192.168.1.10:3001', field: 'url');
+    }
+    final blocked = await shopSwitchBlocked(isar);
+    if (blocked != null) return CloudConnectResult.failed(blocked);
+    final settings = await _settings(isar);
     final owner = await isar.appUsers.filter().roleEqualTo('owner').findFirst();
-    return _connect(
-      isar,
-      url: url,
-      path: '/auth/register-shop',
-      dio: dio,
-      body: {
+    try {
+      final r = await _client(base, dio: dio).post<Object>('/auth/register-shop', data: {
         'shopName': settings.storeName.isEmpty ? 'My Shop' : settings.storeName,
         'ownerName': owner?.name ?? 'Owner',
         'email': email.trim(),
@@ -101,115 +210,233 @@ class CloudService {
         'vatRate': settings.vatRate,
         'currency': settings.currency,
         'pricesIncludeTax': settings.pricesIncludeTax,
-      },
-    );
+        'device': {'id': settings.deviceId, 'name': _tillName(settings)},
+      }).timeout(const Duration(seconds: 45));
+      final data = r.data;
+      if (data is! Map) {
+        return const CloudConnectResult.failed('That address is not a ShopPOS Cloud server.', field: 'url');
+      }
+      if (r.statusCode != 201 && r.statusCode != 200) {
+        return CloudConnectResult.failed(_message(r, 'The cloud answered HTTP ${r.statusCode}.'),
+            field: data['field'] as String?);
+      }
+      await _saveConnection(isar, base, data, fresh: false);
+      if (owner != null) {
+        await _upsertUser(isar, data['user'] as Map,
+            token: data['token'] as String?, expiresAt: data['expiresAt'] as String?);
+      }
+      return CloudConnectResult.ok((data['shop'] as Map)['name'] as String?);
+    } on DioException catch (e) {
+      debugPrint('[Cloud] create failed: ${e.type}');
+      return const CloudConnectResult.failed(
+          'Could not reach the cloud. Check the address and the internet connection.', field: 'url');
+    } on TimeoutException {
+      return const CloudConnectResult.failed('The cloud did not answer. Is the server running?', field: 'url');
+    }
   }
 
-  static Future<CloudConnectResult> signIn(
-    Isar isar, {
+  // ── Join an existing shop ─────────────────────────────────────────────
+  /// Signs in with the person's own account; returns their shops.
+  static Future<CloudLogin> login({
     required String url,
-    required String email,
+    required String identifier,
     required String password,
-    Dio? dio,
-  }) =>
-      _connect(isar,
-          url: url,
-          path: '/auth/login',
-          dio: dio,
-          body: {'email': email.trim(), 'password': password});
-
-  static Future<CloudConnectResult> _connect(
-    Isar isar, {
-    required String url,
-    required String path,
-    required Map<String, dynamic> body,
     Dio? dio,
   }) async {
     final base = normaliseUrl(url);
     if (base.isEmpty) {
-      return const CloudConnectResult.failed(
-          'That address is not valid. Example: http://192.168.1.10:3001',
-          field: 'url');
+      return CloudLogin.failed('That address is not valid. Example: http://192.168.1.10:3001', field: 'url');
     }
-
-    var settings = await isar.storeSettings.get(1) ?? StoreSettings();
-    if (settings.deviceId.isEmpty) settings.deviceId = IdHelpers.newUuid();
-
-    final client = dio ??
-        Dio(BaseOptions(
-          baseUrl: base,
-          connectTimeout: const Duration(seconds: 15),
-          sendTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 30),
-          validateStatus: (_) => true,
-        ));
     try {
-      final r = await client.post<Object>(path, data: {
-        ...body,
-        'device': {
-          'id': settings.deviceId,
-          'name': settings.storeName.isEmpty ? 'ShopPOS till' : '${settings.storeName} till',
-        },
+      final r = await _client(base, dio: dio).post<Object>('/auth/login', data: {
+        'identifier': identifier.trim(),
+        'password': password,
       }).timeout(const Duration(seconds: 45));
       final data = r.data;
-      if (data is! Map) {
-        return const CloudConnectResult.failed(
-            'That address is not a ShopPOS Cloud server.', field: 'url');
-      }
-      if (r.statusCode != 200 && r.statusCode != 201) {
-        return CloudConnectResult.failed(
-            data['message'] as String? ?? 'The cloud answered HTTP ${r.statusCode}.',
-            field: data['field'] as String?);
-      }
-      final deviceToken = data['deviceToken'] as String?;
-      final shop = data['shop'] as Map?;
-      if (deviceToken == null || shop == null) {
-        return const CloudConnectResult.failed('The cloud did not register this till.');
-      }
-
-      // Only the device token is kept; the person's session isn't needed.
-      final session = data['token'] as String?;
-      if (session != null) {
-        client
-            .post<Object>('/auth/logout',
-                options: Options(headers: {'authorization': 'Bearer $session'}))
-            .catchError((Object _) => Response<Object>(requestOptions: RequestOptions()));
-      }
-
-      final switchingShop = settings.cloudShopId != shop['id'];
-      settings = await isar.storeSettings.get(1) ?? settings;
-      settings
-        ..deviceId = settings.deviceId.isEmpty ? IdHelpers.newUuid() : settings.deviceId
-        ..cloudUrl = base
-        ..cloudDeviceToken = deviceToken
-        ..cloudShopId = shop['id'] as String
-        ..cloudShopName = shop['name'] as String? ?? '';
-      if (switchingShop) {
-        // Start the change feed from the beginning and send this till's
-        // whole history once (the cloud keeps each record once).
-        settings
-          ..cloudCursor = ''
-          ..cloudShopUpdatedAt = null
-          ..lastSyncAt = null;
-      }
-      await isar.writeTxn(() => isar.storeSettings.put(settings));
-      if (switchingShop) await SyncService.markAllUnsynced(isar);
-      return CloudConnectResult.ok(settings.cloudShopName);
-    } on DioException catch (e) {
-      debugPrint('[Cloud] connect failed: ${e.type}');
-      return const CloudConnectResult.failed(
-          'Could not reach the cloud. Check the address and the internet connection.',
+      if (data is! Map) return CloudLogin.failed('That address is not a ShopPOS Cloud server.', field: 'url');
+      if (r.statusCode != 200) return CloudLogin.failed(_message(r, 'Sign-in failed.'));
+      return CloudLogin._(
+        null,
+        null,
+        data['token'] as String,
+        Map<String, dynamic>.from(data['user'] as Map),
+        [for (final s in data['shops'] as List) CloudShop(s['id'] as String, s['name'] as String)],
+        base,
+      );
+    } on DioException {
+      return CloudLogin.failed('Could not reach the cloud. Check the address and the internet connection.',
           field: 'url');
     } on TimeoutException {
-      return const CloudConnectResult.failed(
-          'The cloud did not answer. Check the address and that the server is running.',
-          field: 'url');
-    } catch (e) {
-      // Never leave the button spinning.
-      debugPrint('[Cloud] connect failed: $e');
-      return CloudConnectResult.failed('Could not connect: $e', field: 'url');
+      return CloudLogin.failed('The cloud did not answer. Is the server running?', field: 'url');
     }
   }
+
+  /// Puts this till into [shopId] (one of [login]'s shops) and signs the
+  /// person in on it. On a new install ([fresh]) this also completes setup:
+  /// the shop's data is downloaded and no local owner is created.
+  /// Returns the local account of the person, or throws a message.
+  static Future<AppUser> joinShop(Isar isar, CloudLogin login, String shopId,
+      {bool fresh = false, Dio? dio}) async {
+    final blocked = await shopSwitchBlocked(isar, targetShopId: shopId);
+    if (blocked != null) throw CloudJoinException(blocked);
+    final settings = await _settings(isar);
+    final client = _client(login.url, dio: dio);
+    final r = await client
+        .post<Object>('/auth/join-device',
+            data: {
+              'shopId': shopId,
+              'device': {'id': settings.deviceId, 'name': _tillName(settings)},
+            },
+            options: Options(headers: {'authorization': 'Bearer ${login.token}'}))
+        .timeout(const Duration(seconds: 45));
+    final data = r.data;
+    if (data is! Map || r.statusCode != 201) {
+      throw CloudJoinException(data is Map ? (data['message'] as String? ?? 'Could not join the shop.') : 'Could not join the shop.');
+    }
+    await _saveConnection(isar, login.url, data, fresh: fresh);
+    final user = await _upsertUser(isar, data['user'] as Map,
+        token: data['token'] as String?, expiresAt: data['expiresAt'] as String?);
+    // Download the shop now, as this person.
+    final result = await SyncService.cloudSync(isar, checkConnectivity: false, signedInUserId: user.id, dio: dio);
+    if (!result.ok && fresh) throw CloudJoinException(result.error ?? 'Could not download the shop.');
+    return (await isar.appUsers.get(user.id))!;
+  }
+
+  /// Why this till may not join [targetShopId] (null: a shop about to be
+  /// created), or null if it may.
+  ///
+  /// A till's local records (sales, stock, customers, staff and their PINs)
+  /// belong to the shop it was connected to; [disconnect] keeps that shop's
+  /// id for exactly this check. Joining any other shop would upload them
+  /// into it and leave the old shop's staff able to sign in there, so it
+  /// is refused. A till never connected before (its records are meant to
+  /// go up) and re-joining the same shop are both fine.
+  static Future<String?> shopSwitchBlocked(Isar isar, {String? targetShopId}) async {
+    final s = await isar.storeSettings.get(1);
+    final current = s?.cloudShopId ?? '';
+    if (current.isEmpty || current == targetShopId) return null;
+    final name = s!.cloudShopName.trim().isEmpty ? 'another shop' : '"${s.cloudShopName.trim()}"';
+    return 'This till holds the records of $name. It can only reconnect to that shop. '
+        'To use it for a different shop, back up its data (Settings → Backup & Restore), '
+        'then reinstall ShopPOS and join the other shop from the welcome screen.';
+  }
+
+  static Future<void> _saveConnection(Isar isar, String base, Map data, {required bool fresh}) async {
+    final shop = data['shop'] as Map;
+    await isar.writeTxn(() async {
+      final s = await isar.storeSettings.get(1) ?? StoreSettings();
+      final switchingShop = s.cloudShopId != shop['id'];
+      s
+        ..cloudUrl = base
+        ..cloudDeviceToken = data['deviceToken'] as String
+        ..cloudDeviceCode = data['deviceCode'] as String? ?? s.cloudDeviceCode
+        ..cloudShopId = shop['id'] as String
+        ..cloudBusinessId = shop['businessId'] as String? ?? ''
+        ..cloudShopName = shop['name'] as String? ?? '';
+      if (switchingShop) {
+        // Start the change feed from the beginning; a till joining another
+        // shop numbers its receipts afresh under its new till code.
+        s
+          ..cloudCursor = ''
+          ..cloudCursorScope = ''
+          ..cloudShopUpdatedAt = null
+          ..lastSyncAt = null
+          ..receiptSeq = 0;
+      }
+      if (fresh) {
+        // A new install joining a shop: setup comes from the cloud.
+        s
+          ..storeName = shop['name'] as String? ?? s.storeName
+          ..settingsSynced = true
+          ..setupCompleted = true;
+      }
+      await isar.storeSettings.put(s);
+    });
+    final s = await isar.storeSettings.get(1);
+    // A till that already had data sends its whole history once (the cloud
+    // stores each record once). A new install has nothing to send.
+    if (!fresh && s != null && s.lastSyncAt == null) await SyncService.markAllUnsynced(isar);
+  }
+
+  // ── Signing in on a till of the shop ──────────────────────────────────
+  static Future<CloudSignIn> passwordSignIn(Isar isar,
+      {required String identifier, required String password, Dio? dio}) async {
+    final s = await _settings(isar);
+    try {
+      final r = await _client(s.cloudUrl, dio: dio).post<Object>('/auth/login', data: {
+        'identifier': identifier.trim(),
+        'password': password,
+        'device': {'id': s.deviceId},
+      }).timeout(const Duration(seconds: 20));
+      final data = r.data;
+      if (data is! Map) return const CloudSignIn._(null, 'Unexpected reply from the cloud.', offline: true);
+      if (r.statusCode != 200) {
+        return CloudSignIn._(null, _message(r, 'Sign-in failed.'), rejected: r.statusCode == 401);
+      }
+      final user = await _upsertUser(isar, data['user'] as Map,
+          token: data['token'] as String?, expiresAt: data['expiresAt'] as String?);
+      return CloudSignIn._(user, null);
+    } on DioException {
+      return const CloudSignIn._(null, 'No connection to the cloud. Use your PIN instead.', offline: true);
+    } on TimeoutException {
+      return const CloudSignIn._(null, 'No connection to the cloud. Use your PIN instead.', offline: true);
+    }
+  }
+
+  /// PIN sign-in checked by the cloud (anyone allowed in this till's
+  /// shop). Gives the person a session on this till and their PIN hash.
+  static Future<CloudSignIn> pinSignIn(Isar isar, String pin, {Dio? dio}) async {
+    final s = await _settings(isar);
+    try {
+      final r = await _client(s.cloudUrl, dio: dio)
+          .post<Object>('/auth/pin-login',
+              data: {'pin': pin}, options: Options(headers: {'x-device-token': s.cloudDeviceToken}))
+          .timeout(const Duration(seconds: 12));
+      final data = r.data;
+      if (data is! Map) return const CloudSignIn._(null, null, offline: true);
+      if (r.statusCode != 200) {
+        return CloudSignIn._(null, _message(r, 'PIN not recognised.'),
+            rejected: r.statusCode == 401 || r.statusCode == 429, offline: r.statusCode! >= 500);
+      }
+      final user = await _upsertUser(isar, data['user'] as Map,
+          token: data['token'] as String?, expiresAt: data['expiresAt'] as String?);
+      return CloudSignIn._(user, null);
+    } on DioException {
+      return const CloudSignIn._(null, null, offline: true);
+    } on TimeoutException {
+      return const CloudSignIn._(null, null, offline: true);
+    }
+  }
+
+  /// Ends [user]'s session on this till (best effort when offline).
+  static Future<void> signOut(Isar isar, AppUser user, {Dio? dio}) async {
+    final token = user.cloudToken;
+    await isar.writeTxn(() async {
+      final u = await isar.appUsers.get(user.id);
+      if (u == null) return;
+      u
+        ..cloudToken = null
+        ..cloudTokenExpiresAt = null;
+      await isar.appUsers.put(u);
+    });
+    if (token == null) return;
+    final s = await _settings(isar);
+    try {
+      await _client(s.cloudUrl, dio: dio)
+          .post<Object>('/auth/logout', options: Options(headers: {'authorization': 'Bearer $token'}))
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Offline: the session simply expires on the server.
+    }
+  }
+
+  static bool isConnected(StoreSettings s) => s.cloudDeviceToken.isNotEmpty && s.cloudUrl.isNotEmpty;
+
+  /// Whether [user] has a usable session on this till.
+  static bool hasSession(AppUser? user) =>
+      user != null &&
+      (user.cloudToken ?? '').isNotEmpty &&
+      (user.cloudTokenExpiresAt == null || user.cloudTokenExpiresAt!.isAfter(DateTime.now()));
 
   /// Forgets the cloud connection on this till. Local data is kept.
   static Future<void> disconnect(Isar isar) async {
@@ -221,6 +448,19 @@ class CloudService {
         ..cloudCursor = ''
         ..cloudShopUpdatedAt = null;
       await isar.storeSettings.put(s);
+      for (final u in await isar.appUsers.where().findAll()) {
+        u
+          ..cloudToken = null
+          ..cloudTokenExpiresAt = null;
+        await isar.appUsers.put(u);
+      }
     });
   }
+}
+
+class CloudJoinException implements Exception {
+  final String message;
+  CloudJoinException(this.message);
+  @override
+  String toString() => message;
 }

@@ -12,6 +12,8 @@ import 'package:isar/isar.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/features/activity/models/activity_log.dart';
 import 'package:shop_pos/features/auth/models/app_user.dart';
+import 'package:shop_pos/features/customers/models/customer.dart';
+import 'package:shop_pos/features/notifications/models/app_notification.dart';
 import 'package:shop_pos/features/expenses/models/expense.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
@@ -31,4 +33,6 @@ const List<CollectionSchema<dynamic>> allSchemas = [
   ExpenseSchema,
   ShiftSchema,
   ActivityLogSchema,
+  CustomerSchema,
+  AppNotificationSchema,
 ];

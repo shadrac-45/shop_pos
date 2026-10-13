@@ -37,7 +37,8 @@ enum Permission {
   /// Record expenses and till payouts.
   manageExpenses,
 
-  /// Create, deactivate and reset PINs for staff.
+  /// Create, deactivate and reset PINs for staff (managers: cashiers and
+  /// stock clerks only).
   manageStaff,
 
   /// Change store profile, tax, payment methods, backend, backups.
@@ -48,6 +49,9 @@ enum Permission {
 
   /// Open and close a till shift.
   runShift,
+
+  /// Add shops/locations to the business (owner).
+  manageShops,
 }
 
 class PermissionDeniedException implements Exception {
@@ -76,6 +80,8 @@ class Permissions {
       Permission.manageExpenses,
       Permission.viewActivityLog,
       Permission.runShift,
+      // Cashiers and stock clerks only (see StaffService.canManageRole).
+      Permission.manageStaff,
     },
     AppConstants.roleStockClerk: {
       Permission.restock,

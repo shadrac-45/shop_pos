@@ -20,17 +20,23 @@ library;
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dio/dio.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/providers/store_settings_provider.dart';
+import 'package:shop_pos/core/models/store_settings.dart';
+import 'package:shop_pos/core/services/cloud_service.dart';
 import 'package:shop_pos/core/services/sync_service.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
 import 'package:shop_pos/features/activity/models/activity_log.dart';
 import 'package:shop_pos/features/activity/services/activity_log_service.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 
 const autoSyncInterval = Duration(minutes: 10);
-const changeSyncDelay = Duration(seconds: 8);
+/// Sales should reach the owner quickly: a short pause batches a burst of
+/// changes (a sale writes several records) into one upload.
+const changeSyncDelay = Duration(seconds: 3);
 
 enum SyncStatus { notConfigured, offline, online, syncing, synced, failed }
 
@@ -102,9 +108,11 @@ class SyncController extends StateNotifier<SyncState> {
     // Sync while someone is signed in; stop when they sign out.
     ref.listen(currentUserProvider, (_, user) {
       _timer?.cancel();
+      _watchGeneration++;
       if (user != null) {
         _timer = Timer.periodic(autoSyncInterval, (_) => syncNow(quiet: true));
         syncNow(quiet: true);
+        _watchForChanges(_watchGeneration);
       }
     }, fireImmediately: true);
 
@@ -118,7 +126,11 @@ class SyncController extends StateNotifier<SyncState> {
       final online = results.any((c) => c != ConnectivityResult.none);
       final cameBack = online && !state.online;
       state = state.copyWith(online: online);
-      if (cameBack) syncNow(quiet: true);
+      if (cameBack) {
+        // Someone who signed in offline gets their cloud session first,
+        // so their changes go up as them.
+        ref.read(currentUserProvider.notifier).ensureCloudSession().whenComplete(() => syncNow(quiet: true));
+      }
     }));
     Connectivity().checkConnectivity().then((results) {
       if (mounted) state = state.copyWith(online: results.any((c) => c != ConnectivityResult.none));
@@ -130,6 +142,54 @@ class SyncController extends StateNotifier<SyncState> {
       _subs.add(stream.listen((_) => _onLocalChange()));
     }
     _refreshPending();
+  }
+
+  /// Bumped on every sign-in/out, so an old watch loop stops.
+  int _watchGeneration = 0;
+
+  /// Long-poll ShopPOS Cloud while someone is signed in: one request waits
+  /// (up to ~25 s) and returns as soon as anything in the shop changes —
+  /// another till's sale, a stock change, staff or settings — and then we
+  /// sync. Near-instant updates without polling every few seconds.
+  Future<void> _watchForChanges(int generation) async {
+    final isar = ref.read(isarProvider);
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 45),
+    ));
+    var backoff = 5;
+    while (mounted && generation == _watchGeneration) {
+      final settings = await isar.storeSettings.get(1);
+      final user = ref.read(currentUserProvider);
+      if (settings == null || !CloudService.isConnected(settings) || user == null) return;
+      final fresh = await isar.appUsers.get(user.id);
+      if (!state.online || !CloudService.hasSession(fresh)) {
+        if (state.online) await ref.read(currentUserProvider.notifier).ensureCloudSession();
+        await Future<void>.delayed(const Duration(seconds: 20));
+        continue;
+      }
+      try {
+        final r = await dio.get<Map<String, dynamic>>(
+          '${settings.cloudUrl}/sync/wait',
+          queryParameters: {'cursor': settings.cloudCursor, 'timeout': 25},
+          options: Options(headers: {
+            'x-device-token': settings.cloudDeviceToken,
+            'authorization': 'Bearer ${fresh!.cloudToken}',
+          }),
+        );
+        backoff = 5;
+        if (generation != _watchGeneration) return;
+        if (r.data?['changed'] == true) {
+          await syncNow(quiet: true);
+          // Don't spin if the change was our own upload.
+          await Future<void>.delayed(const Duration(seconds: 1));
+        }
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 401) return; // session/till ended: sign-in restarts the loop
+        await Future<void>.delayed(Duration(seconds: backoff));
+        backoff = (backoff * 2).clamp(5, 120);
+      }
+    }
   }
 
   void _onLocalChange() {
@@ -157,6 +217,7 @@ class SyncController extends StateNotifier<SyncState> {
     final result = await SyncService.syncNow(
       isar,
       baseUrl: ref.read(storeSettingsProvider).syncServerUrl.trim(),
+      signedInUserId: ref.read(currentUserProvider)?.id,
     );
     if (!mounted) return result;
     final pending = await SyncService.pendingCount(isar);
