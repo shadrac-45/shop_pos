@@ -63,7 +63,7 @@ class _CloudSectionState extends ConsumerState<CloudSection> {
     }
     if (url.isEmpty) {
       setState(() {
-        _error = 'That address is not valid. Example: http://192.168.1.10:3001';
+        _error = "That address is not valid. Use your shop's address (kofis-shop.example.com) or a local one (http://192.168.1.10:3001).";
         _errorField = 'url';
       });
       return;
@@ -255,7 +255,7 @@ class _CloudSectionState extends ConsumerState<CloudSection> {
           onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
             labelText: 'Cloud address',
-            hintText: 'https://api.example.com',
+            hintText: 'kofis-shop.example.com',
             errorText: fieldError('url'),
           ),
         ),

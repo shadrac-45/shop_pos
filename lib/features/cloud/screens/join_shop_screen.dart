@@ -168,7 +168,7 @@ class _JoinShopScreenState extends ConsumerState<JoinShopScreen> {
                     keyboardType: TextInputType.url,
                     autocorrect: false,
                     style: const TextStyle(color: Colors.white),
-                    decoration: deco('Cloud address', hint: 'https://api.example.com'),
+                    decoration: deco('Your shop address', hint: 'kofis-shop.example.com'),
                   ),
                   const SizedBox(height: AppSpacing.md),
                   TextField(

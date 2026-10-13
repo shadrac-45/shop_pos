@@ -192,7 +192,9 @@ class CloudService {
   }) async {
     final base = normaliseUrl(url);
     if (base.isEmpty) {
-      return const CloudConnectResult.failed('That address is not valid. Example: http://192.168.1.10:3001', field: 'url');
+      return const CloudConnectResult.failed(
+          "That address is not valid. Use your shop's address (kofis-shop.example.com) or a local one (http://192.168.1.10:3001).",
+          field: 'url');
     }
     final blocked = await shopSwitchBlocked(isar);
     if (blocked != null) return CloudConnectResult.failed(blocked);
@@ -245,7 +247,9 @@ class CloudService {
   }) async {
     final base = normaliseUrl(url);
     if (base.isEmpty) {
-      return CloudLogin.failed('That address is not valid. Example: http://192.168.1.10:3001', field: 'url');
+      return CloudLogin.failed(
+          "That address is not valid. Use your shop's address (kofis-shop.example.com) or a local one (http://192.168.1.10:3001).",
+          field: 'url');
     }
     try {
       final r = await _client(base, dio: dio).post<Object>('/auth/login', data: {
@@ -356,6 +360,51 @@ class CloudService {
     // A till that already had data sends its whole history once (the cloud
     // stores each record once). A new install has nothing to send.
     if (!fresh && s != null && s.lastSyncAt == null) await SyncService.markAllUnsynced(isar);
+    // Joined by an IP address? Move to the shop's own address if it has one.
+    unawaited(adoptShopAddress(isar, shop));
+  }
+
+  // ── Permanent shop address ───────────────────────────────────────────
+  /// When the last attempt to move to the shop's address failed (memory
+  /// only): retried at most hourly, so a domain that isn't live yet costs
+  /// one quick request an hour, not one per sync.
+  static DateTime? _addressTriedAt;
+
+  @visibleForTesting
+  static void resetAddressRetryForTest() => _addressTriedAt = null;
+
+  /// Moves this till to its shop's permanent address
+  /// (`https://<shop>.<domain>`) once the cloud reports one, so a till that
+  /// joined by IP address keeps working when that IP changes. Only after
+  /// the new address answers as the same shop; otherwise nothing changes.
+  static Future<void> adoptShopAddress(Isar isar, Map shop, {Dio? dio}) async {
+    final url = shop['url'];
+    if (url is! String || !url.startsWith('https://')) return;
+    final target = normaliseUrl(url);
+    if (target.isEmpty) return;
+    final s = await isar.storeSettings.get(1);
+    if (s == null || s.cloudUrl == target || s.cloudShopId.isEmpty || s.cloudShopId != shop['id']) return;
+    final tried = _addressTriedAt;
+    if (tried != null && DateTime.now().difference(tried) < const Duration(hours: 1)) return;
+    _addressTriedAt = DateTime.now();
+    try {
+      final r = await _client(target, dio: dio).get<Object>('/shop-address').timeout(const Duration(seconds: 10));
+      final data = r.data;
+      final found = data is Map && data['shop'] is Map ? (data['shop'] as Map)['id'] : null;
+      if (r.statusCode != 200 || found != s.cloudShopId) return;
+    } on DioException {
+      return;
+    } on TimeoutException {
+      return;
+    }
+    await isar.writeTxn(() async {
+      final fresh = await isar.storeSettings.get(1);
+      if (fresh == null || fresh.cloudShopId != shop['id']) return;
+      fresh.cloudUrl = target;
+      await isar.storeSettings.put(fresh);
+    });
+    _addressTriedAt = null;
+    debugPrint('[Cloud] now using the shop address $target');
   }
 
   // ── Signing in on a till of the shop ──────────────────────────────────

@@ -42,6 +42,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 
+import 'package:shop_pos/core/services/cloud_service.dart';
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/features/customers/models/customer.dart';
@@ -402,6 +403,7 @@ class SyncService {
         s.lastSyncAt = now;
         await isar.storeSettings.put(s);
       });
+      if (shop != null) await CloudService.adoptShopAddress(isar, shop);
       return SyncResult(
           pushed: pushed, pulled: pulled, at: now, conflicts: conflicts, warnings: warnings,
           waiting: waiting, waitingFor: waitingFor);
