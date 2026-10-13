@@ -17,9 +17,6 @@ import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 /// Session timeout duration: 15 minutes of inactivity
 const kSessionTimeoutDuration = Duration(minutes: 15);
 
-/// Inactivity check interval: check every minute
-const kSessionCheckInterval = Duration(minutes: 1);
-
 // ── Provider ─────────────────────────────────────────────────────
 
 final sessionManagerProvider = Provider((ref) {

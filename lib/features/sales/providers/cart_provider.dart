@@ -21,12 +21,38 @@ import 'package:shop_pos/features/sales/models/sale.dart';
 import 'package:shop_pos/features/sales/services/sale_calculator.dart';
 import 'package:shop_pos/features/sales/services/sale_service.dart';
 
+/// Who the current cart belongs to: the signed-in user's id, or null when
+/// nobody is signed in.
+///
+/// The cart and its sale discount watch this, so every change of person —
+/// including the null in between at sign-out — disposes the old cart and
+/// starts an empty one. One person's unfinished sale can never carry over
+/// to the next, whether they signed out, timed out, or the same person
+/// signed back in. Watching only the id (not the whole user) means a
+/// refresh of the same user's record mid-sale keeps their cart.
+///
+/// One shop per device database, so the user id is enough; switching shops
+/// requires signing out, which resets the cart here anyway.
+final cartOwnerProvider = Provider<int?>((ref) {
+  return ref.watch(currentUserProvider.select((user) => user?.id));
+});
+
 final cartProvider = StateNotifierProvider<CartNotifier, List<CartItem>>((ref) {
+  ref.watch(cartOwnerProvider);
   return CartNotifier(ref);
 });
 
+/// Units in the cart (sum of line quantities), for badges and prompts.
+final cartItemCountProvider = Provider<int>((ref) {
+  return ref.watch(cartProvider).fold(0, (sum, item) => sum + item.quantity);
+});
+
 /// Discount on the whole sale (money, not percent).
-final cartSaleDiscountProvider = StateProvider<double>((ref) => 0);
+/// Scoped to the cart's owner like [cartProvider].
+final cartSaleDiscountProvider = StateProvider<double>((ref) {
+  ref.watch(cartOwnerProvider);
+  return 0;
+});
 
 /// Live totals for the cart, including VAT and discounts.
 final cartTotalsProvider = Provider<SaleTotals>((ref) {
@@ -38,7 +64,17 @@ final cartTotalsProvider = Provider<SaleTotals>((ref) {
   );
 });
 
-enum AddItemResult { success, notFound, outOfStock, expired, archived }
+enum AddItemResult {
+  success,
+  notFound,
+  outOfStock,
+  expired,
+  archived,
+
+  /// The cart was replaced (the person signed out) while the stock check
+  /// was running; nothing was added. Not an error to show anyone.
+  cancelled,
+}
 
 class CartItem {
   final Product product;
@@ -90,6 +126,10 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
     await freshProduct.batches.load();
 
     final available = await InventoryService.sellableQuantity(isar, freshProduct.id);
+    // Signed out while we were checking stock: this cart has been replaced.
+    // Writing to it now would be lost at best — never let a late result
+    // reach whoever signs in next.
+    if (!mounted) return AddItemResult.cancelled;
     if (available <= 0) {
       return freshProduct.totalStock > 0
           ? AddItemResult.expired
@@ -196,8 +236,12 @@ class CartNotifier extends StateNotifier<List<CartItem>> {
       momoPhone: momoPhone,
       cashierId: cashierId,
     );
-    clearCart();
-    ref.read(reportProvider.notifier).refresh();
+    // The sale is recorded either way; if the cart was replaced meanwhile
+    // (sign-out mid-sale) there is nothing left here to clear.
+    if (mounted) {
+      clearCart();
+      ref.read(reportProvider.notifier).refresh();
+    }
     return sale;
   }
 }

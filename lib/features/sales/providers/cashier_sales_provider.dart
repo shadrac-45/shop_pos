@@ -112,8 +112,9 @@ final cashierSalesStreamProvider =
   };
 
   return isar.sales
-      .filter()
+      .where()
       .cashierIdEqualTo(currentUser.id)
+      .filter()
       .timestampBetween(start, DateHelpers.endOfDay(now))
       .sortByTimestampDesc()
       .watch(fireImmediately: true);

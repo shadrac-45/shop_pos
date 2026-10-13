@@ -7,8 +7,9 @@ import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:shop_pos/core/theme/app_theme.dart';
-import 'package:shop_pos/features/auth/screens/admin_login_screen.dart';
 import 'package:shop_pos/features/auth/screens/role_select_screen.dart';
+import 'package:shop_pos/features/cloud/screens/welcome_screen.dart';
+import 'package:shop_pos/features/notifications/notification_store.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/database/migrations.dart';
 import 'package:shop_pos/core/database/schemas.dart';
@@ -112,6 +113,8 @@ class ShopPOSApp extends ConsumerWidget {
     // Keeps cloud sync running in the background (it starts and stops
     // itself as users sign in and out).
     ref.listen(syncProvider, (_, __) {});
+    // Keeps this person's notifications stored on the device up to date.
+    ref.listen(notificationStoreProvider, (_, __) {});
 
     return MaterialApp(
       title: 'ShopPOS',
@@ -125,11 +128,10 @@ class ShopPOSApp extends ConsumerWidget {
         child: child,
       ),
       // ── Routing ─────────────────────────────────────────────
-      // First launch (setup not done) → Admin email+pass login → Wizard
+      // First launch (setup not done) → Welcome: create a new shop
+      // (admin email+pass → wizard) or join an existing cloud shop.
       // Subsequent launches (setup done) → Role selector login screen
-      home: setupCompleted
-          ? const RoleSelectScreen()
-          : const AdminLoginScreen(setupAlreadyDone: false),
+      home: setupCompleted ? const RoleSelectScreen() : const WelcomeScreen(),
     );
   }
 }
