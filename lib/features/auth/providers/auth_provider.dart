@@ -238,9 +238,28 @@ class AuthNotifier extends StateNotifier<AppUser?> {
   /// fetched (memory only; cleared on success, rejection or sign-out).
   String? _pendingCloudPin;
 
+  /// The session request in progress, and whose it is. Sign-in, the sync
+  /// watcher, the alerts summary and notifications all ask at the same
+  /// moment after a PIN sign-in; they share this one request.
+  Future<bool>? _sessionRequest;
+  int? _sessionRequestFor;
+
   /// Makes sure the signed-in person has a cloud session on this till.
   /// Returns true if they have one.
-  Future<bool> ensureCloudSession() async {
+  Future<bool> ensureCloudSession() {
+    final user = state;
+    if (user == null) return Future.value(false);
+    final pending = _sessionRequest;
+    if (pending != null && _sessionRequestFor == user.id) return pending;
+    final request = _ensureCloudSession();
+    _sessionRequest = request;
+    _sessionRequestFor = user.id;
+    return request.whenComplete(() {
+      if (identical(_sessionRequest, request)) _sessionRequest = null;
+    });
+  }
+
+  Future<bool> _ensureCloudSession() async {
     final user = state;
     if (user == null) return false;
     final isar = ref.read(isarProvider);
