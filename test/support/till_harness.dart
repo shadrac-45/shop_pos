@@ -27,8 +27,13 @@ import 'package:shop_pos/features/shared/widgets/glass.dart';
 import 'package:shop_pos/features/shifts/providers/shift_provider.dart';
 
 class FakeSettings extends StoreSettingsNotifier {
+  FakeSettings([this.initial]);
+
+  /// Settings to start with (default: a plain shop called Kofi Shop).
+  final StoreSettings? initial;
+
   @override
-  StoreSettings build() => StoreSettings()..storeName = 'Kofi Shop';
+  StoreSettings build() => initial ?? (StoreSettings()..storeName = 'Kofi Shop');
 }
 
 class FakeAuth extends AuthNotifier {
@@ -119,10 +124,11 @@ Widget tillApp({
   Widget? home,
   TillHandles? handles,
   AppUser? user,
+  StoreSettings? settings,
 }) {
   return ProviderScope(
     overrides: [
-      storeSettingsProvider.overrideWith(FakeSettings.new),
+      storeSettingsProvider.overrideWith(() => FakeSettings(settings)),
       productServiceProvider.overrideWith((ref) => Stream.value(testProducts)),
       currentShiftProvider.overrideWith((ref) => Stream.value(null)),
       currentUserProvider.overrideWith((ref) {

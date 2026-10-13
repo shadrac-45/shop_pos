@@ -80,6 +80,7 @@ IconData paymentIcon(String method) => switch (method) {
       AppConstants.paymentMomo ||
       AppConstants.paymentMomoPaystack =>
         Icons.phone_android_rounded,
+      AppConstants.paymentMomoManual => Icons.send_to_mobile_rounded,
       AppConstants.paymentCard => Icons.credit_card_rounded,
       AppConstants.paymentQr => Icons.qr_code_2_rounded,
       AppConstants.paymentSplit => Icons.call_split_rounded,

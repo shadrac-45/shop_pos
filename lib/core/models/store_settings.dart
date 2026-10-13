@@ -38,6 +38,20 @@ class StoreSettings {
   bool enableMoMo = true;
   bool enableQr = false;
 
+  /// Manual Mobile Money: the customer sends money straight to the shop's
+  /// own MoMo number and the cashier records it (no Paystack, no automatic
+  /// check). Offered at checkout only when [momoNumber] is set.
+  bool enableManualMoMo = false;
+
+  /// The shop's MoMo number customers send to, e.g. 0244123456.
+  String momoNumber = '';
+
+  /// Its network: 'mtn', 'telecel' or 'at'.
+  String momoNetwork = 'mtn';
+
+  /// The name the customer sees when sending (to confirm the right shop).
+  String momoAccountName = '';
+
   // ── Hardware ─────────────────────────────
   bool printerEnabled = false;
   bool scannerEnabled = false;

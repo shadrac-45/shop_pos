@@ -21,6 +21,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
@@ -457,12 +458,18 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            for (final m in methods)
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(right: m == methods.last ? 0 : AppSpacing.sm),
+        // One row; more than four methods wrap to a second row so each
+        // button stays readable on a phone.
+        LayoutBuilder(builder: (context, c) {
+          final perRow = methods.length > 4 ? 3 : methods.length;
+          final width = (c.maxWidth - AppSpacing.sm * (perRow - 1)) / perRow;
+          return Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: [
+              for (final m in methods)
+                SizedBox(
+                  width: width,
                   child: PaymentOptionButton(
                     type: m,
                     icon: paymentIcon(m),
@@ -475,14 +482,31 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
                     compact: true,
                   ),
                 ),
-              ),
-          ],
-        ),
+            ],
+          );
+        }),
         if (selected == AppConstants.paymentMomo && backendUrl.isEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
           const Text(
             'Mobile Money needs the backend URL set in Settings → Integrations.',
             style: TextStyle(color: AppColors.danger, fontSize: 12),
+          ),
+        ],
+        if (selected == AppConstants.paymentMomoManual) ...[
+          const SizedBox(height: AppSpacing.md),
+          _ManualMomoDetails(settings: ref.watch(storeSettingsProvider)),
+          const SizedBox(height: AppSpacing.sm),
+          TextField(
+            controller: _referenceCtrl,
+            decoration: const InputDecoration(
+              labelText: 'MoMo transaction ID (optional)',
+              hintText: 'From the customer\'s confirmation SMS',
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          const Text(
+            'Complete the sale only after you have seen the customer\'s MoMo confirmation.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
           ),
         ],
         if (selected == AppConstants.paymentCard || selected == AppConstants.paymentQr) ...[
@@ -657,6 +681,45 @@ class _ErrorBanner extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Where the customer sends a manual MoMo payment: the shop's own number,
+/// its network and the account name they should see before confirming.
+class _ManualMomoDetails extends StatelessWidget {
+  final StoreSettings settings;
+  const _ManualMomoDetails({required this.settings});
+
+  static const _networks = {'mtn': 'MTN MoMo', 'telecel': 'Telecel Cash', 'at': 'AT Money'};
+
+  @override
+  Widget build(BuildContext context) {
+    final network = _networks[settings.momoNetwork] ?? settings.momoNetwork;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppTone.success.tint,
+        borderRadius: AppSpacing.borderLg,
+        border: Border.all(color: AppTone.success.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Customer sends to', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          const SizedBox(height: 2),
+          SelectableText(
+            settings.momoNumber,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: 0.5),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            [network, if (settings.momoAccountName.trim().isNotEmpty) settings.momoAccountName.trim()].join(' · '),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ],
       ),
     );
   }

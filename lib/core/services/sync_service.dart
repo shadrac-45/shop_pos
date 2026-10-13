@@ -516,7 +516,11 @@ class SyncService {
         ..enableCash = extra['enableCash'] as bool? ?? s.enableCash
         ..enableCard = extra['enableCard'] as bool? ?? s.enableCard
         ..enableMoMo = extra['enableMoMo'] as bool? ?? s.enableMoMo
-        ..enableQr = extra['enableQr'] as bool? ?? s.enableQr;
+        ..enableQr = extra['enableQr'] as bool? ?? s.enableQr
+        ..enableManualMoMo = extra['enableManualMoMo'] as bool? ?? s.enableManualMoMo
+        ..momoNumber = extra['momoNumber'] as String? ?? s.momoNumber
+        ..momoNetwork = extra['momoNetwork'] as String? ?? s.momoNetwork
+        ..momoAccountName = extra['momoAccountName'] as String? ?? s.momoAccountName;
     }
   }
 
@@ -1245,6 +1249,10 @@ class SyncService {
                 'enableCard': settings.enableCard,
                 'enableMoMo': settings.enableMoMo,
                 'enableQr': settings.enableQr,
+                'enableManualMoMo': settings.enableManualMoMo,
+                'momoNumber': settings.momoNumber,
+                'momoNetwork': settings.momoNetwork,
+                'momoAccountName': settings.momoAccountName,
               },
               'updatedAt': iso(settings.settingsUpdatedAt ?? DateTime.now()),
             }

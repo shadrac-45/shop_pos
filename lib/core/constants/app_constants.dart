@@ -41,9 +41,14 @@ class AppConstants {
   static const String paymentCard = 'card';
   static const String paymentQr = 'qr';
 
+  /// Mobile Money sent straight to the shop's own MoMo number and
+  /// recorded by the cashier (no Paystack). See StoreSettings.momoNumber.
+  static const String paymentMomoManual = 'momo_manual';
+
   static String paymentLabel(String method) => switch (method) {
         paymentCash => 'Cash',
         paymentMomo || paymentMomoPaystack => 'MoMo',
+        paymentMomoManual => 'MoMo (manual)',
         paymentCard => 'Card',
         paymentQr => 'QR',
         paymentSplit => 'Split',

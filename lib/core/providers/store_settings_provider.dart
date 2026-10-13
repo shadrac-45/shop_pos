@@ -72,6 +72,7 @@ class StoreSettingsNotifier extends Notifier<StoreSettings> {
 String sharedSettingsSignature(StoreSettings s) => [
       s.storeName, s.currency, s.vatRate, s.pricesIncludeTax, s.storePhone, s.storeAddress, s.taxId,
       s.receiptFooter, s.enableCash, s.enableCard, s.enableMoMo, s.enableQr,
+      s.enableManualMoMo, s.momoNumber, s.momoNetwork, s.momoAccountName,
     ].join('|');
 
 /// VAT settings to apply at checkout.
@@ -86,6 +87,8 @@ final enabledPaymentMethodsProvider = Provider<List<String>>((ref) {
   return [
     if (s.enableCash) AppConstants.paymentCash,
     if (s.enableMoMo) AppConstants.paymentMomo,
+    // Only with a number to send to.
+    if (s.enableManualMoMo && s.momoNumber.trim().isNotEmpty) AppConstants.paymentMomoManual,
     if (s.enableCard) AppConstants.paymentCard,
     if (s.enableQr) AppConstants.paymentQr,
   ];

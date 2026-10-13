@@ -17,6 +17,7 @@ import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
+import 'package:shop_pos/features/sales/services/paystack_service.dart' show normaliseGhanaPhone;
 import 'package:shop_pos/features/settings/screens/printer_setup_screen.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 
@@ -36,6 +37,10 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
   late final _vat = TextEditingController();
   late final _taxId = TextEditingController();
   late final _footer = TextEditingController();
+  late final _momoNumber = TextEditingController();
+  late final _momoName = TextEditingController();
+  late String _momoNetwork;
+  late bool _manualMomo;
 
   late bool _pricesIncludeTax;
   late bool _cash, _momo, _card, _qr;
@@ -58,6 +63,10 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
     _momo = s.enableMoMo;
     _card = s.enableCard;
     _qr = s.enableQr;
+    _manualMomo = s.enableManualMoMo;
+    _momoNumber.text = s.momoNumber;
+    _momoName.text = s.momoAccountName;
+    _momoNetwork = _networks.containsKey(s.momoNetwork) ? s.momoNetwork : 'mtn';
     _printer = s.printerEnabled;
     _scanner = s.scannerEnabled;
     _drawer = s.cashDrawerEnabled;
@@ -65,7 +74,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _address, _currency, _vat, _taxId, _footer]) {
+    for (final c in [_name, _phone, _address, _currency, _vat, _taxId, _footer, _momoNumber, _momoName]) {
       c.dispose();
     }
     super.dispose();
@@ -73,7 +82,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (!(_cash || _momo || _card || _qr)) {
+    if (!(_cash || _momo || _manualMomo || _card || _qr)) {
       context.showErrorSnackbar('Turn on at least one payment method.');
       return;
     }
@@ -93,6 +102,11 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
           ..enableMoMo = _momo
           ..enableCard = _card
           ..enableQr = _qr
+          ..enableManualMoMo = _manualMomo
+          // Stored in local format (0244123456), as customers dial it.
+          ..momoNumber = _localPhone(_momoNumber.text)
+          ..momoNetwork = _momoNetwork
+          ..momoAccountName = _momoName.text.trim()
           ..printerEnabled = _printer
           ..scannerEnabled = _scanner
           ..cashDrawerEnabled = _drawer,
@@ -185,6 +199,28 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
               toggle('Cash', _cash, (v) => _cash = v),
               toggle('Mobile Money (Paystack)', _momo, (v) => _momo = v,
                   subtitle: 'Needs the backend set up in Integrations.'),
+              toggle('Mobile Money (manual)', _manualMomo, (v) => _manualMomo = v,
+                  subtitle: 'The customer sends money to your own MoMo number; the cashier records it. '
+                      'No automatic check: match these sales to your MoMo statement.'),
+              if (_manualMomo) ...[
+                field(_momoNumber, 'Shop MoMo number', hint: '0244123456', keyboard: TextInputType.phone,
+                    validator: (v) => normaliseGhanaPhone(v ?? '') == null
+                        ? 'Enter a Ghana MoMo number, e.g. 0244123456'
+                        : null),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _momoNetwork,
+                    decoration: const InputDecoration(labelText: 'Network'),
+                    items: [
+                      for (final e in _networks.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+                    ],
+                    onChanged: (v) => setState(() => _momoNetwork = v ?? _momoNetwork),
+                  ),
+                ),
+                field(_momoName, 'Account name', hint: 'The name customers see when sending',
+                    validator: (v) => (v ?? '').trim().isEmpty ? 'Customers check this name before sending' : null),
+              ],
               toggle('Card', _card, (v) => _card = v,
                   subtitle: 'Recorded after you charge on your own card machine.'),
               toggle('QR', _qr, (v) => _qr = v,
@@ -231,4 +267,17 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
       ),
     );
   }
+}
+
+/// MoMo networks a shop can receive manual payments on.
+const Map<String, String> _networks = {
+  'mtn': 'MTN MoMo',
+  'telecel': 'Telecel Cash',
+  'at': 'AT Money',
+};
+
+/// A Ghana number in the local form customers dial (0244123456).
+String _localPhone(String raw) {
+  final intl = normaliseGhanaPhone(raw);
+  return intl == null ? raw.trim() : '0${intl.substring(4)}';
 }
