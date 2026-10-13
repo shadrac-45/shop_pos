@@ -299,9 +299,6 @@ abstract class HeaderAliases {
 abstract class ProductImportParser {
   ProductImportParser._();
 
-  /// Minimum preview rows shown to the user before committing.
-  static const int previewRowLimit = 5;
-
   /// Entry point for the UI. Dispatches to a background isolate and
   /// returns a typed result. Never throws.
   static Future<ProductImportParseResult> parseFile(

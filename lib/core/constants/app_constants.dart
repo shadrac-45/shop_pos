@@ -15,9 +15,6 @@ class AppConstants {
   /// Keep in step with `version:` in pubspec.yaml.
   static const String appVersion = '1.3.0';
 
-  // ── Database ────────────────────────────────
-  static const String dbName = 'shop_pos_db';
-
   // ── Roles ───────────────────────────────────
   static const String roleOwner = 'owner';
   static const String roleCashier = 'cashier';
@@ -54,7 +51,6 @@ class AppConstants {
       };
 
   // ── PIN ─────────────────────────────────────
-  static const int pinLength = 4;
   static const int minPinLength = 4;
   static const int maxPinLength = 6;
 
@@ -62,20 +58,13 @@ class AppConstants {
   /// with them is refused and they can't be chosen as a new PIN.
   static const List<String> defaultPins = ['1234', '0000'];
 
-  // ── Expiry Thresholds (days) ────────────────
-  static const int expiryUrgentDays = 7;
-  static const int expirySoonDays = 30;
+  // Stock and expiry thresholds live in products/models/product_status.dart.
 
   // ── Currency ────────────────────────────────
   /// Defaults only; the store's own currency comes from StoreSettings via
   /// CurrencyHelpers.
   static const String currencySymbol = 'GH₵';
   static const String currencyCode = 'GHS';
-
-  // ── Animation Durations (ms) ────────────────
-  static const int animFast = 150;
-  static const int animMedium = 300;
-  static const int animSlow = 500;
 
   // ── Backend ─────────────────────────────────
   /// Used only when no URL is saved in StoreSettings: the Android emulator's

@@ -1,4 +1,4 @@
-﻿// ============================================
+// ============================================
 // Widget Test — ShopPOS
 // ============================================
 // Basic test to verify app initialization.
@@ -9,7 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:shop_pos/core/utils/hash_helpers.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
-import 'package:shop_pos/core/utils/expiry_helpers.dart';
 import 'package:shop_pos/features/sales/services/paystack_service.dart';
 
 void main() {
@@ -71,17 +70,6 @@ void main() {
       expect(CurrencyHelpers.format(12.5), equals('GH₵ 12.50'));
       expect(CurrencyHelpers.format(0.0), equals('GH₵ 0.00'));
       expect(CurrencyHelpers.formatCompact(15.0), equals('GH₵15.00'));
-    });
-  });
-
-  group('ExpiryHelpers Tests', () {
-    test('Categorizes expiry levels correctly based on remaining days', () {
-      expect(ExpiryHelpers.getLevel(null), equals(ExpiryLevel.noStock));
-      expect(ExpiryHelpers.getLevel(-1), equals(ExpiryLevel.expired));
-      expect(ExpiryHelpers.getLevel(0), equals(ExpiryLevel.expired));
-      expect(ExpiryHelpers.getLevel(5), equals(ExpiryLevel.urgent));
-      expect(ExpiryHelpers.getLevel(20), equals(ExpiryLevel.warning));
-      expect(ExpiryHelpers.getLevel(40), equals(ExpiryLevel.good));
     });
   });
 

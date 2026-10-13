@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/products/services/product_import_parser.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 /// The fields the owner can map, in display order.
 enum MappableField { name, price, stock, category, barcode, cost }
@@ -59,7 +60,7 @@ class ColumnMappingDialog extends StatefulWidget {
     List<List<String>> sampleRows = const [],
     ColumnMapping? initial,
   }) {
-    return showDialog<ColumnMapping>(
+    return showAppDialog<ColumnMapping>(
       context: context,
       builder: (_) => ColumnMappingDialog(
         headerLabels: headerLabels,

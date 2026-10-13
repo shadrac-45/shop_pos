@@ -169,21 +169,6 @@ class AdminAuthService {
     return user;
   }
 
-  /// Create or update the owner account with email + password credentials.
-  /// Called during first-run setup wizard completion.
-  static Future<void> setAdminCredentials(
-    Isar isar, {
-    required int userId,
-    required String email,
-    required String password,
-  }) async {
-    final user = await isar.appUsers.get(userId);
-    if (user == null) return;
-    user.email = email.trim().toLowerCase();
-    user.passwordHash = await HashHelpers.hashPasswordAsync(password);
-    await isar.writeTxn(() async => isar.appUsers.put(user));
-  }
-
   // ── Recovery ───────────────────────────────────────────────────────
 
   /// How long recovery is still locked, or zero.
@@ -276,6 +261,7 @@ class AdminAuthService {
       ..passwordHash = hash
       ..credentialVersion += 1
       ..updatedAt = DateTime.now()
+      ..modifiedBy = owner.id
       ..isSynced = false;
     await isar.writeTxn(() async {
       await isar.appUsers.put(owner);
@@ -301,6 +287,7 @@ class AdminAuthService {
     user
       ..passwordHash = await HashHelpers.hashPasswordAsync(newPassword)
       ..updatedAt = DateTime.now()
+      ..modifiedBy = user.id
       ..isSynced = false;
     await isar.writeTxn(() async {
       await isar.appUsers.put(user);

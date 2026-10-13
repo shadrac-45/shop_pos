@@ -9,7 +9,6 @@
 /// ============================================
 library;
 
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
@@ -166,14 +165,6 @@ This Way Chocolate Drink,2.50,150,Beverages''';
     return _toServiceResult(parsed);
   }
 
-  /// Synchronous spreadsheet parse, retained for tests and the sample
-  /// seeder. Prefer [parseExcelBytesAsync] from the UI.
-  static CsvParseResult parseExcelBytes(List<int> bytes) {
-    return _toServiceResult(
-      ProductImportParser.parseBytesSync(Uint8List.fromList(bytes)),
-    );
-  }
-
   /// Re-parses a file with a mapping the owner confirmed in the mapping
   /// dialog. Returns rows flagged valid/invalid, no longer a mapping prompt.
   static Future<CsvParseResult> parseBytesWithMappingAsync(
@@ -228,20 +219,6 @@ This Way Chocolate Drink,2.50,150,Beverages''';
       headerLabels: parsed.headerLabels,
       sampleRows: parsed.sampleRows,
     );
-  }
-
-  /// Convenience wrapper that reads a file from disk and delegates to
-  /// [parseExcelBytes]. Returns a friendly error on failure.
-  static CsvParseResult parseExcelFile(String path) {
-    try {
-      final bytes = File(path).readAsBytesSync();
-      return parseExcelBytes(bytes);
-    } catch (e) {
-      return CsvParseResult(
-        rows: const [],
-        generalError: 'Failed to read Excel file: $e',
-      );
-    }
   }
 
   /// Commits valid rows into Isar in a single transaction.

@@ -22,13 +22,12 @@ class AppBreakpoints {
   static const double small = 360;
   static const double tablet = 600;
 
+  /// From here the app uses a side navigation rail instead of a bottom
+  /// bar, and the till shows the cart beside the catalogue (Material's
+  /// "expanded" window class).
+  static const double rail = 840;
+
   // ── Convenience predicates ───────────────────
-
-  /// True when the device/window is tablet-width or wider.
-  static bool isTablet(double width) => width >= tablet;
-
-  /// True when the device/window is narrower than [small].
-  static bool isSmallPhone(double width) => width < small;
 
   /// True when the current orientation is landscape.
   static bool isLandscape(BuildContext context) =>
@@ -54,21 +53,6 @@ class AppBreakpoints {
       return ((screenWidth - 560) / 2).clamp(24.0, double.infinity);
     }
     return 20.0;
-  }
-
-  /// Vertical padding to use for the bottom CTA strip.
-  /// Tighter in landscape to save vertical space.
-  static double ctaVerticalPadding(BuildContext context) =>
-      isLandscape(context) ? 10.0 : 20.0;
-
-  /// Logo display height based on screen height.
-  ///   very short (≤ 600) → 100
-  ///   normal (≤ 800)     → 130
-  ///   tall (> 800)       → 160
-  static double logoHeight(double screenHeight) {
-    if (screenHeight <= 600) return 100.0;
-    if (screenHeight <= 800) return 130.0;
-    return 160.0;
   }
 
   /// PIN dot dimension based on available width (3 dots in ~280 dp).
