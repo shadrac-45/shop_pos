@@ -13,6 +13,8 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shop_pos/features/cloud/screens/cloud_dashboard_screen.dart';
+import 'package:shop_pos/features/customers/screens/customers_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -39,6 +41,8 @@ import 'package:shop_pos/features/settings/widgets/change_pin_dialog.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/features/shifts/screens/shift_screen.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
+import 'package:shop_pos/features/shared/widgets/sign_out_button.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -81,7 +85,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final user = ref.read(currentUserProvider);
     if (user == null) return;
 
-    final result = await showDialog<bool>(
+    final result = await showAppDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => ChangePinDialog(user: user),
@@ -100,7 +104,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final confirm = TextEditingController();
     String? error;
 
-    final changed = await showDialog<bool>(
+    final changed = await showAppDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
@@ -203,46 +207,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final store = ref.watch(storeSettingsProvider);
     bool can(Permission p) => Permissions.can(user, p);
 
+    // A tab of the main shell, which already shows the "Settings" title:
+    // no app bar of its own, and the shell's canvas shows through.
     return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(
-        title: const Text('Settings & Profile'),
-        backgroundColor: AppColors.cardBg,
-      ),
+      backgroundColor: Colors.transparent,
       body: SafeArea(
+        top: false,
         child: ListView(
-          padding: const EdgeInsets.all(AppSpacing.lg),
+          padding: EdgeInsets.symmetric(
+            horizontal: _sidePadding(MediaQuery.sizeOf(context).width),
+            vertical: AppSpacing.sm,
+          ),
           children: [
             // ── User Profile Card ─────────────────────────────
             TouchableCard(
               padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                    child: Text(
-                      (user?.name.isNotEmpty ?? false) ? user!.name[0].toUpperCase() : 'U',
-                      style: const TextStyle(
-                          color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.w800),
+              child: LayoutBuilder(builder: (context, c) {
+                final who = Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: AppColors.primaryLight,
+                      child: Text(
+                        (user?.name.isNotEmpty ?? false) ? user!.name[0].toUpperCase() : 'U',
+                        style: const TextStyle(
+                            color: AppColors.primaryDark, fontSize: 24, fontWeight: FontWeight.w800),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: AppSpacing.lg),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(user?.name ?? 'Staff', style: Theme.of(context).textTheme.titleLarge),
-                        const SizedBox(height: 4),
-                        StatusPill(
-                          AppConstants.roleLabel(user?.role ?? AppConstants.roleCashier),
-                          color: AppColors.primary,
-                        ),
-                      ],
+                    const SizedBox(width: AppSpacing.lg),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(user?.name ?? 'Staff', style: Theme.of(context).textTheme.titleLarge),
+                          const SizedBox(height: 4),
+                          StatusPill(
+                            AppConstants.roleLabel(user?.role ?? AppConstants.roleCashier),
+                            color: AppColors.primary,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                );
+                // Compact, beside who is signed in; no full-width red slab.
+                // Phones: below it, so the name keeps the card's width.
+                if (c.maxWidth < 300) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [who, const SizedBox(height: AppSpacing.md), const SignOutButton()],
+                  );
+                }
+                return Row(children: [Expanded(child: who), const SignOutButton()]);
+              }),
             ),
 
             // ── Account ───────────────────────────────────────
@@ -271,6 +288,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => _open(const ShiftScreen()),
               ),
             ],
+
+            // ── Cloud (any shop the person manages, from anywhere) ────
+            if (cloudDashboardAvailable(ref.watch(storeSettingsProvider), ref.watch(currentUserProvider))) ...[
+              const SectionLabel('ShopPOS Cloud'),
+              _tile(
+                icon: Icons.dashboard_rounded,
+                title: 'Cloud Dashboard',
+                subtitle: 'Live sales, stock, payments, activity, tills and staff of your shops',
+                onTap: () => _open(const CloudDashboardScreen()),
+              ),
+            ],
+            if (can(Permission.sell))
+              _tile(
+                icon: Icons.people_alt_rounded,
+                title: 'Customers',
+                subtitle: "Shared with the shop's other tills",
+                onTap: () => _open(const CustomersScreen()),
+              ),
 
             // ── Management ────────────────────────────────────
             if (can(Permission.manageExpenses) ||
@@ -368,21 +403,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
 
-            const SizedBox(height: AppSpacing.xxl),
-
-            // ShopPOSApp returns to the role picker once the user is null.
-            ElevatedButton.icon(
-              onPressed: () => ref.read(currentUserProvider.notifier).logout(),
-              icon: const Icon(Icons.logout_rounded),
-              label: const Text('Sign Out'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.danger,
-                foregroundColor: Colors.white,
-              ),
-            ),
+            const SizedBox(height: AppSpacing.xl),
           ],
         ),
       ),
     );
   }
 }
+
+/// Keeps settings a readable column on wide screens.
+double _sidePadding(double width) =>
+    width > 1100 ? (width - 1100) / 2 + AppSpacing.xl : AppSpacing.lg;

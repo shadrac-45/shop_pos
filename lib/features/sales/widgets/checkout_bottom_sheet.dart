@@ -1,7 +1,9 @@
 /// ============================================
 /// Checkout Bottom Sheet — ShopPOS
 /// ============================================
-/// Touch-first checkout drawer:
+/// Touch-first checkout: a frosted bottom sheet
+/// on phones, a payment dialog beside the cart
+/// panel on tablets.
 ///   • Cart lines with quantity steppers and,
 ///     for managers/owners, line discounts
 ///   • Sale discount, VAT and total breakdown
@@ -19,11 +21,11 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
-import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/services/session_manager.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/providers/cart_provider.dart';
@@ -31,7 +33,10 @@ import 'package:shop_pos/features/sales/screens/momo_payment_screen.dart';
 import 'package:shop_pos/features/sales/screens/sale_detail_screen.dart';
 import 'package:shop_pos/features/sales/services/sale_calculator.dart';
 import 'package:shop_pos/features/sales/services/sale_service.dart';
+import 'package:shop_pos/features/sales/widgets/cart_line_tile.dart';
+import 'package:shop_pos/features/sales/widgets/cart_panel.dart';
 import 'package:shop_pos/features/sales/widgets/payment_option_button.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 
 /// One editable payment row in split mode.
@@ -48,7 +53,11 @@ class _SplitRow {
 }
 
 class CheckoutBottomSheet extends ConsumerStatefulWidget {
-  const CheckoutBottomSheet({super.key});
+  /// Show the editable cart lines. Off when the cart is already on screen
+  /// (the tablet cart panel) and this opens as a payment dialog.
+  final bool showLines;
+
+  const CheckoutBottomSheet({super.key, this.showLines = true});
 
   @override
   ConsumerState<CheckoutBottomSheet> createState() => _CheckoutBottomSheetState();
@@ -61,6 +70,15 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
   final _tenderedCtrl = TextEditingController();
   final _referenceCtrl = TextEditingController();
   bool _isCompleting = false;
+
+  /// Problem with the payment, shown inside the sheet right above the
+  /// Pay button — where the cashier is looking — rather than as a toast.
+  String? _error;
+
+  void _showError(String message) {
+    HapticFeedback.vibrate();
+    setState(() => _error = message);
+  }
 
   @override
   void dispose() {
@@ -106,20 +124,21 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
 
   Future<void> _complete(SaleTotals totals) async {
     if (_isCompleting) return;
+    setState(() => _error = null);
     final total = totals.total;
     final List<PaymentInput> payments;
 
     if (_split) {
       final paid = _splitPaid();
       if ((paid - total).abs() > 0.005) {
-        context.showErrorSnackbar(
+        _showError(
             'Split payments add up to ${CurrencyHelpers.format(paid)}; the total is ${CurrencyHelpers.format(total)}.');
         return;
       }
       final momoRows =
           _splitRows.where((r) => r.method == AppConstants.paymentMomo).toList();
       if (momoRows.length > 1) {
-        context.showErrorSnackbar('Use only one Mobile Money part per sale.');
+        _showError('Use only one Mobile Money part per sale.');
         return;
       }
       payments = [
@@ -134,7 +153,7 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     } else {
       final method = _selectedMethod;
       if (method == null) {
-        context.showErrorSnackbar('Choose how the customer is paying.');
+        _showError('Choose how the customer is paying.');
         return;
       }
       if (method == AppConstants.paymentMomo) {
@@ -149,7 +168,7 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     final tendered = _tenderedCtrl.text.trim().isEmpty ? null : parseMoney(_tenderedCtrl.text);
     final cashDue = _cashDue(total);
     if (tendered != null && tendered + 0.005 < cashDue) {
-      context.showErrorSnackbar(
+      _showError(
           'Cash received is less than the ${CurrencyHelpers.format(cashDue)} due in cash.');
       return;
     }
@@ -170,7 +189,7 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _isCompleting = false);
-      context.showErrorSnackbar(errorMessage(e));
+      _showError(errorMessage(e));
     }
   }
 
@@ -185,46 +204,6 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
         amountTendered: _cashDue(totals.total) > 0 ? tendered : null,
       ),
     ));
-  }
-
-  // ── Discounts ───────────────────────────────────────────────────────
-
-  Future<double?> _askAmount(String title, double max, double current) async {
-    final ctrl = TextEditingController(
-        text: current > 0 ? current.toStringAsFixed(2) : '');
-    return showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            MoneyField(controller: ctrl, label: 'Discount amount', autofocus: true),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final pct in [5, 10, 20])
-                  ActionChip(
-                    label: Text('$pct%'),
-                    onPressed: () =>
-                        ctrl.text = roundMoney(max * pct / 100).toStringAsFixed(2),
-                  ),
-              ],
-            ),
-            Text('Up to ${CurrencyHelpers.format(max)}',
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, 0.0), child: const Text('Remove')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, parseMoney(ctrl.text).clamp(0, max).toDouble()),
-            child: const Text('Apply'),
-          ),
-        ],
-      ),
-    );
   }
 
   // ── Build ───────────────────────────────────────────────────────────
@@ -248,200 +227,215 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
     }
     _selectedMethod ??= methods.isNotEmpty ? methods.first : null;
 
-    final mediaQuery = MediaQuery.of(context);
+    // Granular lookups: rebuild only for the media values used here.
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final total = totals.total;
     final cashDue = _cashDue(total);
     final tendered = parseMoney(_tenderedCtrl.text);
     final change = SaleCalculator.changeDue(tendered: tendered, cashDue: cashDue);
+    final itemCount = cart.fold(0, (s, i) => s + i.quantity);
+    final inSheet = widget.showLines;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        decoration: const BoxDecoration(
-          color: AppColors.cardBg,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: mediaQuery.size.height * 0.9),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+    final content = ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: screenHeight * (inSheet ? 0.92 : 0.86)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Header ──────────────────────────────────
+          if (inSheet)
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: AppSpacing.sm),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.borderStrong,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.md, AppSpacing.sm, 0),
+            child: Row(
               children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppColors.border,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Checkout', style: Theme.of(context).textTheme.headlineLarge),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, color: AppColors.textSecondary),
-                      constraints: AppTouch.touchConstraints,
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: AppSpacing.sm),
-
-                // ── Cart lines ────────────────────────────────
-                for (var index = 0; index < cart.length; index++)
-                  _buildLine(index, cart[index], cartNotifier, canDiscount),
-
-                if (canDiscount)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () async {
-                        final current = ref.read(cartSaleDiscountProvider);
-                        final value = await _askAmount(
-                            'Discount on whole sale', totals.subtotal, current);
-                        if (value != null) {
-                          ref.read(cartSaleDiscountProvider.notifier).state = value;
-                        }
-                      },
-                      icon: const Icon(Icons.local_offer_outlined, size: 18),
-                      label: Text(totals.saleDiscount > 0
-                          ? 'Sale discount: −${CurrencyHelpers.format(totals.saleDiscount)}'
-                          : 'Add sale discount'),
-                    ),
-                  ),
-
-                const Divider(height: 24),
-
-                // ── Totals ────────────────────────────────────
-                _totalRow('Subtotal', totals.grossSubtotal),
-                if (totals.discountTotal > 0)
-                  _totalRow('Discounts', -totals.discountTotal, color: AppColors.danger),
-                if (totals.taxRate > 0)
-                  _totalRow(
-                    'VAT ${totals.taxRate % 1 == 0 ? totals.taxRate.toInt() : totals.taxRate}%'
-                    '${totals.pricesIncludeTax ? ' (included)' : ''}',
-                    totals.taxAmount,
-                  ),
-                const SizedBox(height: AppSpacing.sm),
-                Container(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.1),
-                    borderRadius: AppSpacing.borderLg,
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Total Payable',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          CurrencyHelpers.format(total),
+                      Text(inSheet ? 'Checkout' : 'Take payment',
                           style: const TextStyle(
-                              fontSize: 26, fontWeight: FontWeight.w900, color: AppColors.primary),
-                        ),
-                      ),
+                              fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+                      Text('$itemCount item${itemCount == 1 ? '' : 's'}',
+                          style: const TextStyle(color: AppColors.textMuted, fontSize: 13)),
                     ],
                   ),
                 ),
-
-                const SizedBox(height: AppSpacing.xl),
-
-                // ── Payment ───────────────────────────────────
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text('Payment',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                    ),
-                    if (methods.length > 1)
-                      TextButton.icon(
-                        onPressed: () => _toggleSplit(methods, total),
-                        icon: Icon(_split ? Icons.close : Icons.call_split_rounded, size: 18),
-                        label: Text(_split ? 'Single payment' : 'Split payment'),
-                      ),
-                  ],
+                IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.pop(context),
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                if (methods.isEmpty)
-                  const Text(
-                    'No payment methods are enabled. Ask the owner to turn some on in Settings.',
-                    style: TextStyle(color: AppColors.danger),
-                  )
-                else if (!_split)
-                  _buildSinglePayment(methods, ref.watch(backendUrlProvider))
-                else
-                  _buildSplitPayments(methods, total),
-
-                if (cashDue > 0) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  MoneyField(
-                    controller: _tenderedCtrl,
-                    label: 'Cash received (optional)',
-                    hint: CurrencyHelpers.formatRaw(cashDue),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      for (final amount in _quickCashAmounts(cashDue))
-                        ActionChip(
-                          label: Text(CurrencyHelpers.formatCompact(amount)),
-                          onPressed: () => setState(
-                              () => _tenderedCtrl.text = amount.toStringAsFixed(2)),
-                        ),
-                    ],
-                  ),
-                  if (_tenderedCtrl.text.trim().isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: AppSpacing.sm),
-                      child: Text(
-                        change >= 0
-                            ? 'Change due: ${CurrencyHelpers.format(change)}'
-                            : 'Short by ${CurrencyHelpers.format(-change)}',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: change >= 0 ? AppColors.primary : AppColors.danger,
-                        ),
-                      ),
-                    ),
-                ],
-
-                const SizedBox(height: AppSpacing.xl),
-                ElevatedButton.icon(
-                  onPressed: _isCompleting || methods.isEmpty ? null : () => _complete(totals),
-                  icon: _isCompleting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.check_circle_rounded),
-                  label: Text(_isCompleting
-                      ? 'Completing Sale...'
-                      : (!_split && _selectedMethod == AppConstants.paymentMomo)
-                          ? 'Request MoMo Payment'
-                          : 'Complete Sale'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: AppColors.textOnPrimary,
-                    minimumSize: const Size(double.infinity, AppTouch.buttonHeight),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.md),
               ],
             ),
           ),
+
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.md, AppSpacing.xl, AppSpacing.md),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── Cart lines (phones; tablets show them in the panel) ──
+                  if (inSheet) ...[
+                    for (var index = 0; index < cart.length; index++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                        child: CartLineTile(
+                          key: ValueKey(cart[index].product.id),
+                          index: index,
+                          item: cart[index],
+                          cart: cartNotifier,
+                          canDiscount: canDiscount,
+                        ),
+                      ),
+                    if (canDiscount) SaleDiscountButton(totals: totals),
+                  ],
+
+                  // ── Totals ──────────────────────────────
+                  Container(
+                    margin: const EdgeInsets.only(top: AppSpacing.xs),
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    decoration: BoxDecoration(
+                      color: AppColors.cardBg,
+                      borderRadius: AppSpacing.borderLg,
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: CartTotalsSummary(totals: totals),
+                  ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  // ── Payment ─────────────────────────────
+                  Row(
+                    children: [
+                      const Expanded(child: Text('PAYMENT METHOD', style: AppText.overline)),
+                      if (methods.length > 1)
+                        TextButton.icon(
+                          onPressed: () => _toggleSplit(methods, total),
+                          icon: Icon(_split ? Icons.close_rounded : Icons.call_split_rounded, size: 18),
+                          label: Text(_split ? 'Single payment' : 'Split payment'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  if (methods.isEmpty)
+                    const Text(
+                      'No payment methods are enabled. Ask the owner to turn some on in Settings.',
+                      style: TextStyle(color: AppColors.dangerDarkText),
+                    )
+                  else if (!_split)
+                    _buildSinglePayment(methods, ref.watch(backendUrlProvider))
+                  else
+                    _buildSplitPayments(methods, total),
+
+                  if (cashDue > 0) ...[
+                    const SizedBox(height: AppSpacing.lg),
+                    MoneyField(
+                      controller: _tenderedCtrl,
+                      label: 'Cash received (optional)',
+                      hint: CurrencyHelpers.formatRaw(cashDue),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.sm,
+                      children: [
+                        for (final amount in _quickCashAmounts(cashDue))
+                          ChoiceChip(
+                            label: Text(
+                              amount == roundMoney(cashDue)
+                                  ? 'Exact ${CurrencyHelpers.formatCompact(amount)}'
+                                  : CurrencyHelpers.formatCompact(amount),
+                              style: const TextStyle(fontFeatures: AppText.tabular),
+                            ),
+                            selected: (parseMoney(_tenderedCtrl.text) - amount).abs() < 0.005 &&
+                                _tenderedCtrl.text.trim().isNotEmpty,
+                            onSelected: (_) => setState(
+                                () => _tenderedCtrl.text = amount.toStringAsFixed(2)),
+                          ),
+                      ],
+                    ),
+                    if (_tenderedCtrl.text.trim().isNotEmpty)
+                      _ChangeDue(change: change),
+                  ],
+                ],
+              ),
+            ),
+          ),
+
+          // ── Pay ───────────────────────────────────────
+          Container(
+            padding: EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.md, AppSpacing.xl,
+                AppSpacing.lg + (inSheet ? safeBottom : 0)),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: AppColors.glassStroke)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_error != null) _ErrorBanner(message: _error!),
+                ElevatedButton.icon(
+              onPressed: _isCompleting || methods.isEmpty ? null : () => _complete(totals),
+              style: AppButtons.pay(),
+              icon: _isCompleting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                    )
+                  : const Icon(Icons.check_circle_rounded),
+              label: Text(_isCompleting
+                  ? 'Completing sale…'
+                  : (!_split && _selectedMethod == AppConstants.paymentMomo)
+                      ? 'Request MoMo  ${CurrencyHelpers.format(total)}'
+                      : 'Complete sale  ${CurrencyHelpers.format(total)}'),
+            ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final radius = inSheet
+        ? const BorderRadius.vertical(top: Radius.circular(28))
+        : const BorderRadius.all(Radius.circular(28));
+
+    return Padding(
+      // A bottom sheet must lift itself above the keyboard; a Dialog
+      // already does, so adding it there would double the lift.
+      padding: EdgeInsets.only(bottom: inSheet ? keyboard : 0),
+      // Solid, not glass: this is the transaction itself, so every figure
+      // must read cleanly. The frosted backdrop behind it supplies the depth.
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: inSheet ? null : AppGlass.shadow,
+        ),
+        child: Material(
+          color: AppColors.cardBg,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            borderRadius: radius,
+            side: const BorderSide(color: AppColors.glassStroke),
+          ),
+          child: content,
         ),
       ),
     );
@@ -456,91 +450,6 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
       if (options.length >= 4) break;
     }
     return options.toList()..sort();
-  }
-
-  Widget _totalRow(String label, double amount, {Color? color}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(color: AppColors.textSecondary))),
-          Text(
-            amount < 0
-                ? '−${CurrencyHelpers.format(-amount)}'
-                : CurrencyHelpers.format(amount),
-            style: TextStyle(fontWeight: FontWeight.w700, color: color ?? AppColors.textPrimary),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLine(int index, CartItem item, CartNotifier cartNotifier, bool canDiscount) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceBg,
-        borderRadius: AppSpacing.borderMd,
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: InkWell(
-              onTap: canDiscount
-                  ? () async {
-                      final v = await _askAmount(
-                          'Discount on ${item.product.name}', item.gross, item.discount);
-                      if (v != null) cartNotifier.setLineDiscount(index, v);
-                    }
-                  : null,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(item.product.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                  Text(
-                    '${CurrencyHelpers.formatCompact(item.product.price)} each'
-                    '${item.discount > 0 ? '  ·  −${CurrencyHelpers.formatCompact(item.discount)}' : ''}',
-                    style: TextStyle(
-                        color: item.discount > 0 ? AppColors.danger : AppColors.textSecondary,
-                        fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.remove_circle_outline_rounded, color: AppColors.danger, size: 22),
-            constraints: AppTouch.touchConstraints,
-            onPressed: () => cartNotifier.updateQuantity(index, -1),
-          ),
-          Text('${item.quantity}',
-              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded, color: AppColors.primary, size: 22),
-            constraints: AppTouch.touchConstraints,
-            onPressed: () {
-              if (!cartNotifier.updateQuantity(index, 1)) {
-                context.showErrorSnackbar(
-                    'Only ${item.available} "${item.product.name}" in stock.');
-              }
-            },
-          ),
-          SizedBox(
-            width: 76,
-            child: Text(
-              CurrencyHelpers.formatCompact(item.subtotal),
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _buildSinglePayment(List<String> methods, String backendUrl) {
@@ -675,6 +584,80 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
             style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
           ),
       ],
+    );
+  }
+}
+
+/// Change to hand back (or how much is still short), large enough to read
+/// across the counter.
+class _ChangeDue extends StatelessWidget {
+  final double change;
+  const _ChangeDue({required this.change});
+
+  @override
+  Widget build(BuildContext context) {
+    final ok = change >= 0;
+    return Container(
+      margin: const EdgeInsets.only(top: AppSpacing.md),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+      decoration: BoxDecoration(
+        color: ok ? AppTone.success.tint : AppTone.danger.tint,
+        borderRadius: AppSpacing.borderLg,
+        border: Border.all(color: ok ? AppTone.success.border : AppTone.danger.border),
+      ),
+      child: Row(
+        children: [
+          Icon(ok ? Icons.payments_rounded : Icons.error_outline_rounded,
+              color: ok ? AppColors.primaryDark : AppColors.danger),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(ok ? 'Change due' : 'Short by',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: ok ? AppColors.successDarkText : AppColors.dangerDarkText)),
+          ),
+          Text(
+            CurrencyHelpers.format(ok ? change : -change),
+            style: AppText.money(
+                size: 22,
+                weight: FontWeight.w800,
+                color: ok ? AppColors.successDarkText : AppColors.dangerDarkText),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  const _ErrorBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: AppSpacing.md),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm + 2),
+        decoration: BoxDecoration(
+          color: AppTone.danger.tint,
+          borderRadius: AppSpacing.borderMd,
+          border: Border.all(color: AppTone.danger.border),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.error_outline_rounded, size: 20, color: AppTone.danger.fg),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(message,
+                  style: TextStyle(
+                      color: AppTone.danger.text, fontWeight: FontWeight.w600, height: 1.3)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -112,7 +112,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Backup & Restore'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Backup & Restore')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.lg),

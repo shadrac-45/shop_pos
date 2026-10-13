@@ -87,7 +87,7 @@ class _PrinterSetupScreenState extends ConsumerState<PrinterSetupScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Receipt Printer'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Receipt Printer')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.lg),

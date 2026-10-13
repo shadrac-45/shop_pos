@@ -19,6 +19,7 @@ import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/sales/services/paystack_service.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 class DeveloperDebugScreen extends ConsumerStatefulWidget {
   const DeveloperDebugScreen({super.key});
@@ -57,7 +58,7 @@ class _DeveloperDebugScreenState extends ConsumerState<DeveloperDebugScreen> {
   void _showEditUrlDialog(String currentUrl) {
     final controller = TextEditingController(text: currentUrl);
 
-    showDialog(
+    showAppDialog(
       context: context,
       builder: (ctx) {
         return AlertDialog(
@@ -139,7 +140,6 @@ class _DeveloperDebugScreenState extends ConsumerState<DeveloperDebugScreen> {
       backgroundColor: AppColors.scaffoldBg,
       appBar: AppBar(
         title: const Text('Developer & Debug Panel'),
-        backgroundColor: AppColors.cardBg,
       ),
       body: SafeArea(
         child: ListView(
@@ -310,7 +310,7 @@ class _DeveloperDebugScreenState extends ConsumerState<DeveloperDebugScreen> {
                 children: [
                   const ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.touch_app_rounded, color: AppColors.info),
+                    leading: Icon(Icons.touch_app_rounded, color: AppColors.textSecondary),
                     title: Text('Touch Target Enforcement'),
                     subtitle: Text('Optimized for Touchscreens (≥48×48 dp)'),
                     trailing: Icon(Icons.check_circle_rounded, color: AppColors.success, size: 20),

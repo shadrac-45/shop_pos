@@ -8,6 +8,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'package:shop_pos/features/shared/widgets/glass.dart';
+
 extension ContextExtension on BuildContext {
   // ── Theme Access ────────────────────────────
   ThemeData get theme => Theme.of(this);
@@ -24,71 +26,16 @@ extension ContextExtension on BuildContext {
   bool get isLargeScreen => screenHeight >= 900;
 
   // ── Snackbar Helpers ────────────────────────
-  void showSuccessSnackbar(String message) {
-    ScaffoldMessenger.of(this).hideCurrentSnackBar();
-    ScaffoldMessenger.of(this).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_rounded,
-                color: Colors.white, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(message,
-                  style: const TextStyle(fontWeight: FontWeight.w500)),
-            ),
-          ],
-        ),
-        backgroundColor: const Color(0xFF2EA043),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
-  }
+  // Dark-glass toasts in the root overlay, above dialogs and sheets;
+  // see [showGlassToast].
 
-  void showErrorSnackbar(String message) {
-    ScaffoldMessenger.of(this).hideCurrentSnackBar();
-    ScaffoldMessenger.of(this).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.error_rounded, color: Colors.white, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(message,
-                  style: const TextStyle(fontWeight: FontWeight.w500)),
-            ),
-          ],
-        ),
-        backgroundColor: const Color(0xFFF85149),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
-  }
+  void _toast(String message, ToastKind kind) => showGlassToast(this, message, kind);
+
+  void showSuccessSnackbar(String message) => _toast(message, ToastKind.success);
+
+  void showErrorSnackbar(String message) => _toast(message, ToastKind.error);
 
   /// Neutral-toned notice, used for guidance rather than success or
   /// failure (e.g. pointing the user at another tab).
-  void showInfoSnackbar(String message) {
-    ScaffoldMessenger.of(this).hideCurrentSnackBar();
-    ScaffoldMessenger.of(this).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.info_outline, color: Colors.white, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(fontWeight: FontWeight.w500),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: const Color(0xFF2563EB),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
-  }
+  void showInfoSnackbar(String message) => _toast(message, ToastKind.info);
 }

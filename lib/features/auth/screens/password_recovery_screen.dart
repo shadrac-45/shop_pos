@@ -199,7 +199,7 @@ class _PasswordRecoveryScreenState extends ConsumerState<PasswordRecoveryScreen>
     };
 
     return Scaffold(
-      backgroundColor: const Color(0xFF14151D),
+      backgroundColor: AppColors.ink,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,

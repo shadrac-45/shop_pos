@@ -732,7 +732,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     };
 
     return Scaffold(
-      backgroundColor: const Color(0xFF14151D),
+      backgroundColor: AppColors.ink,
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -770,7 +770,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                                 child: Text('Admin account: ${s.adminEmail}',
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
-                                        color: Color(0xFF8B8EA3),
+                                        color: AppColors.onInkMuted,
                                         fontSize: 13)),
                               ),
                             ],
@@ -820,7 +820,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             Container(
               padding: EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm,
                   AppSpacing.lg, keyboard > 0 ? AppSpacing.sm : AppSpacing.lg),
-              color: const Color(0xFF14151D),
+              color: AppColors.ink,
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 560),
@@ -834,7 +834,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                           child: Text(_error!,
                               textAlign: TextAlign.center,
                               style: const TextStyle(
-                                  color: Color(0xFFFF8A80), fontSize: 13)),
+                                  color: AppColors.dangerOnInk, fontSize: 13)),
                         ),
                       Row(
                         children: [
@@ -845,7 +845,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: Colors.white,
                                   side: const BorderSide(
-                                      color: Color(0xFF3A3D4C)),
+                                      color: AppColors.inkBorder),
                                   minimumSize: const Size.fromHeight(48),
                                 ),
                                 child: const Text('Back'),
@@ -914,11 +914,11 @@ class _ProgressHeader extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 14, color: AppColors.accent),
+                  Icon(icon, size: 14, color: AppColors.successOnInk),
                   const SizedBox(width: 6),
                   Text(label,
                       style: const TextStyle(
-                          color: AppColors.accent,
+                          color: AppColors.successOnInk,
                           fontSize: 12,
                           fontWeight: FontWeight.w700)),
                 ],
@@ -926,7 +926,7 @@ class _ProgressHeader extends StatelessWidget {
             ),
             const Spacer(),
             Text('Step ${step + 1} of $total',
-                style: const TextStyle(color: Color(0xFF8B8EA3), fontSize: 13)),
+                style: const TextStyle(color: AppColors.onInkMuted, fontSize: 13)),
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
@@ -935,8 +935,8 @@ class _ProgressHeader extends StatelessWidget {
           child: LinearProgressIndicator(
             value: (step + 1) / total,
             minHeight: 6,
-            backgroundColor: const Color(0xFF2A2C38),
-            color: AppColors.accent,
+            backgroundColor: AppColors.inkBorder,
+            color: AppColors.successOnInk,
           ),
         ),
       ],

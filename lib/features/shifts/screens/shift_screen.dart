@@ -148,7 +148,7 @@ class _ShiftScreenState extends ConsumerState<ShiftScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Shift & Cash-up'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Shift & Cash-up')),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
@@ -285,7 +285,7 @@ class _ShiftScreenState extends ConsumerState<ShiftScreen> {
                 '${CurrencyHelpers.format(s.countedCash ?? 0)}'
                 '${s.closingNote != null ? '\n${s.closingNote}' : ''}'),
         trailing: v == null
-            ? const StatusPill('open', color: AppColors.info)
+            ? const StatusPill('open', color: AppColors.primary)
             : StatusPill(
                 v.abs() < 0.005 ? 'balanced' : (v > 0 ? 'over' : 'short'),
                 color: v.abs() < 0.005 ? AppColors.success : AppColors.danger,

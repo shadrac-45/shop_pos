@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -113,21 +114,11 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
           _pinError = 'PIN must be 4 to 6 digits and not a default PIN';
         });
       case StaffOperationResult.unauthorized:
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Unauthorized: Only the shop owner can create staff accounts.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        context.showErrorSnackbar('Unauthorized: Only the shop owner can create staff accounts.');
       case StaffOperationResult.weakPin:
       case StaffOperationResult.userNotFound:
       case StaffOperationResult.error:
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to create account. Please check the inputs.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        context.showErrorSnackbar('Failed to create account. Please check the inputs.');
     }
   }
 
@@ -255,7 +246,7 @@ class _AddCashierDialogState extends ConsumerState<AddCashierDialog> {
                     prefixIcon: Icons.work_outline_rounded,
                   ),
                   items: [
-                    for (final r in AppConstants.staffRoles)
+                    for (final r in AppConstants.staffRoles.where(ref.read(staffProvider).canManageRole))
                       DropdownMenuItem(value: r, child: Text(AppConstants.roleLabel(r))),
                   ],
                   onChanged: (v) => setState(() => _role = v ?? _role),

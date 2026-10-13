@@ -137,7 +137,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Store Settings'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Store Settings')),
       body: SafeArea(
         child: Form(
           key: _formKey,

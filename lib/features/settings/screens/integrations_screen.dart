@@ -209,7 +209,7 @@ class _IntegrationsScreenState extends ConsumerState<IntegrationsScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Integrations'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Integrations')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.lg),

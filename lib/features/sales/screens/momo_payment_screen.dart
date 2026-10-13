@@ -33,6 +33,7 @@ import 'package:shop_pos/features/sales/screens/sale_detail_screen.dart';
 import 'package:shop_pos/features/sales/services/sale_service.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 enum MomoFlowStep {
   form,
@@ -93,9 +94,9 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
   Timer? _countdownTimer;
 
   static const _providers = [
-    (code: AppConstants.momoProviderMtn, name: 'MTN Mobile Money', color: Color(0xFFFFCC00), icon: Icons.phone_android_rounded),
-    (code: AppConstants.momoProviderVodafone, name: 'Telecel Cash (Vodafone)', color: Color(0xFFE60000), icon: Icons.phone_iphone_rounded),
-    (code: AppConstants.momoProviderAirtelTigo, name: 'AT Money (AirtelTigo)', color: Color(0xFF003399), icon: Icons.cell_tower_rounded),
+    (code: AppConstants.momoProviderMtn, name: 'MTN Mobile Money', icon: Icons.phone_android_rounded),
+    (code: AppConstants.momoProviderVodafone, name: 'Telecel Cash (Vodafone)', icon: Icons.phone_iphone_rounded),
+    (code: AppConstants.momoProviderAirtelTigo, name: 'AT Money (AirtelTigo)', icon: Icons.cell_tower_rounded),
   ];
 
   @override
@@ -381,7 +382,7 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
   /// Leaving while a charge is unresolved risks the customer paying with
   /// no sale recorded, so the cashier has to confirm it.
   Future<void> _confirmLeaveUnresolved() async {
-    final leave = await showDialog<bool>(
+    final leave = await showAppDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Leave without a result?'),
@@ -444,7 +445,6 @@ class _MomoPaymentScreenState extends ConsumerState<MomoPaymentScreen> {
         backgroundColor: AppColors.scaffoldBg,
         appBar: AppBar(
           title: const Text('Mobile Money Payment'),
-          backgroundColor: AppColors.cardBg,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_rounded),
             onPressed: _canLeaveFreely || _currentStep == MomoFlowStep.timeout

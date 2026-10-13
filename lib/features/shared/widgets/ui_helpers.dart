@@ -12,7 +12,9 @@ import 'package:flutter/services.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 /// Upper-case grey label above a group of settings or cards.
 class SectionLabel extends StatelessWidget {
@@ -23,14 +25,9 @@ class SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: AppSpacing.xl, bottom: AppSpacing.sm),
-      child: Text(
-        text.toUpperCase(),
-        style: const TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textSecondary,
-          letterSpacing: 1,
-        ),
+      child: Semantics(
+        header: true,
+        child: Text(text.toUpperCase(), style: AppText.overline),
       ),
     );
   }
@@ -89,15 +86,9 @@ IconData paymentIcon(String method) => switch (method) {
       _ => Icons.receipt_rounded,
     };
 
-Color paymentColor(String method) => switch (method) {
-      AppConstants.paymentCash => AppColors.cashColor,
-      AppConstants.paymentMomo ||
-      AppConstants.paymentMomoPaystack =>
-        AppColors.momoColor,
-      AppConstants.paymentCard => AppColors.info,
-      AppConstants.paymentQr => const Color(0xFF7C3AED),
-      _ => AppColors.textSecondary,
-    };
+/// Payment methods are told apart by icon and label, not by hue: a
+/// payment method is not a status, so it stays neutral.
+Color paymentColor(String method) => AppColors.textSecondary;
 
 /// Small coloured pill, e.g. a payment method or sale status.
 class StatusPill extends StatelessWidget {
@@ -108,22 +99,35 @@ class StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Mid-tone status colours are too light as text on their own 12% tint;
+    // a darker shade of the same hue keeps it above 4.5:1.
+    final ink = Color.lerp(color, Colors.black, 0.3)!;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
-        borderRadius: AppSpacing.borderSm,
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 11, color: color),
-            const SizedBox(width: 3),
+            Icon(icon, size: 12, color: ink),
+            const SizedBox(width: 4),
           ],
-          Text(
-            text.toUpperCase(),
-            style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w800),
+          // Shrinks (with "…") instead of overflowing when space is tight.
+          Flexible(
+            child: Text(
+              text.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: ink,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.4,
+              ),
+            ),
           ),
         ],
       ),
@@ -139,24 +143,42 @@ Future<bool> confirmDialog(
   String confirmLabel = 'Confirm',
   bool destructive = false,
 }) async {
-  final result = await showDialog<bool>(
+  final result = await showAppDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: Text(message),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
+      icon: Container(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          color: destructive ? AppTone.danger.tint : AppTone.success.tint,
+          shape: BoxShape.circle,
         ),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          style: destructive
-              ? ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.danger,
-                  foregroundColor: Colors.white)
-              : null,
-          child: Text(confirmLabel),
+        child: Icon(
+          destructive ? Icons.warning_amber_rounded : Icons.help_outline_rounded,
+          color: destructive ? AppColors.danger : AppColors.primaryDark,
+          size: 28,
+        ),
+      ),
+      title: Text(title, textAlign: TextAlign.center),
+      content: Text(message, textAlign: TextAlign.center),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: destructive ? AppButtons.danger() : null,
+                child: Text(confirmLabel),
+              ),
+            ),
+          ],
         ),
       ],
     ),

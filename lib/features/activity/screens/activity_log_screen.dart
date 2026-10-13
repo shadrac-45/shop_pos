@@ -79,7 +79,7 @@ class _ActivityLogScreenState extends ConsumerState<ActivityLogScreen> {
     final entries = _entries;
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Activity Log'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Activity Log')),
       body: SafeArea(
         child: Column(
           children: [

@@ -20,6 +20,7 @@ import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
@@ -31,6 +32,7 @@ import 'package:shop_pos/features/sales/services/escpos.dart';
 import 'package:shop_pos/features/sales/services/receipt_service.dart';
 import 'package:shop_pos/features/sales/services/sale_service.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 class SaleDetailScreen extends ConsumerStatefulWidget {
   final int saleId;
@@ -173,7 +175,7 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
           'This sale was recorded before item-level refunds were supported. Use Void instead.');
       return;
     }
-    final request = await showDialog<_RefundRequest>(
+    final request = await showAppDialog<_RefundRequest>(
       context: context,
       builder: (_) => _RefundDialog(sale: _receipt!.sale, items: items),
     );
@@ -215,7 +217,7 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
     required String confirmLabel,
   }) {
     final ctrl = TextEditingController();
-    return showDialog<String>(
+    return showAppDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(title),
@@ -257,14 +259,17 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
       backgroundColor: AppColors.scaffoldBg,
       appBar: AppBar(
         title: Text(r == null ? 'Receipt' : 'Receipt ${r.sale.receiptNumber}'),
-        backgroundColor: AppColors.cardBg,
       ),
       body: SafeArea(
         child: _error != null
             ? Center(child: Text(_error!))
             : r == null
                 ? const Center(child: CircularProgressIndicator())
-                : ListView(
+                : Center(
+                  // A receipt is narrow; on tablets keep it a readable column.
+                  child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: ListView(
                     padding: const EdgeInsets.all(AppSpacing.lg),
                     children: [
                       if (widget.justCompleted) _buildCompletedBanner(r.sale),
@@ -300,7 +305,7 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
                                   icon: const Icon(Icons.undo_rounded),
                                   label: const Text('Refund Items'),
                                   style: OutlinedButton.styleFrom(
-                                      foregroundColor: AppColors.warning),
+                                      foregroundColor: AppColors.warningDarkText),
                                 ),
                               ),
                             if (r.sale.status == SaleStatus.completed) ...[
@@ -310,8 +315,7 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
                                   onPressed: _busy ? null : _void,
                                   icon: const Icon(Icons.block_rounded),
                                   label: const Text('Void Sale'),
-                                  style: OutlinedButton.styleFrom(
-                                      foregroundColor: AppColors.danger),
+                                  style: AppButtons.dangerOutlined(),
                                 ),
                               ),
                             ],
@@ -323,14 +327,14 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
                         ElevatedButton.icon(
                           onPressed: () => Navigator.of(context).pop(),
                           icon: const Icon(Icons.add_shopping_cart_rounded),
-                          label: const Text('New Sale'),
-                          style: ElevatedButton.styleFrom(
-                            minimumSize: const Size(double.infinity, AppTouch.buttonHeight),
-                          ),
+                          label: const Text('New sale'),
+                          style: AppButtons.pay(),
                         ),
                       ],
                     ],
                   ),
+                  ),
+                ),
       ),
     );
   }
@@ -338,25 +342,51 @@ class _SaleDetailScreenState extends ConsumerState<SaleDetailScreen> {
   Widget _buildCompletedBanner(Sale sale) {
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.lg),
-      padding: const EdgeInsets.all(AppSpacing.lg),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
-        color: AppColors.success.withValues(alpha: 0.1),
-        borderRadius: AppSpacing.borderLg,
-        border: Border.all(color: AppColors.success.withValues(alpha: 0.4)),
+        color: AppColors.cardBg,
+        borderRadius: AppSpacing.borderXl,
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         children: [
-          const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 40),
-          const SizedBox(height: AppSpacing.sm),
-          Text('Sale complete — ${CurrencyHelpers.format(sale.totalAmount)}',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: const BoxDecoration(
+              color: AppColors.primaryLight,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.check_rounded, color: AppColors.primaryDark, size: 32),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          const Text('Sale complete',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+          const SizedBox(height: 2),
+          Text(CurrencyHelpers.format(sale.totalAmount),
+              style: AppText.money(size: 30, weight: FontWeight.w800)),
           if (sale.amountTendered != null) ...[
-            const SizedBox(height: AppSpacing.sm),
-            const Text('Change due',
-                style: TextStyle(color: AppColors.textSecondary)),
-            Text(CurrencyHelpers.format(sale.changeDue),
-                style: const TextStyle(
-                    fontSize: 32, fontWeight: FontWeight.w900, color: AppColors.primary)),
+            const SizedBox(height: AppSpacing.lg),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+              decoration: BoxDecoration(
+                color: AppColors.primarySoft,
+                borderRadius: AppSpacing.borderLg,
+                border: Border.all(color: AppColors.primaryLight),
+              ),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('Change due',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, color: AppColors.successDarkText)),
+                  ),
+                  Text(CurrencyHelpers.format(sale.changeDue),
+                      style: AppText.money(
+                          size: 26, weight: FontWeight.w800, color: AppColors.successDarkText)),
+                ],
+              ),
+            ),
           ],
         ],
       ),

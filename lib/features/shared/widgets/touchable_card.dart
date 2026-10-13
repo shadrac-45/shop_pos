@@ -1,13 +1,15 @@
-﻿/// ============================================
+/// ============================================
 /// Touchable Card — ShopPOS
 /// ============================================
 /// Touch-first interactive container providing 150ms
 /// press-scale animation and minimum 48x48 dp boundary.
+/// Without onTap/onLongPress it is a static surface.
 /// ============================================
 library;
 
 import 'package:flutter/material.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
+import 'package:shop_pos/core/theme/app_motion.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 
 class TouchableCard extends StatefulWidget {
@@ -45,13 +47,18 @@ class _TouchableCardState extends State<TouchableCard> {
   void _onTapUp(TapUpDetails _) => setState(() => _isPressed = false);
   void _onTapCancel() => setState(() => _isPressed = false);
 
+  /// Cards with no tap handler are plain surfaces: they must not shrink or
+  /// ripple under a finger, or they look broken ("I tapped it, nothing
+  /// happened").
+  bool get _interactive => widget.onTap != null || widget.onLongPress != null;
+
   @override
   Widget build(BuildContext context) {
     final effectiveRadius = widget.borderRadius ?? AppSpacing.borderLg;
 
     return AnimatedScale(
       scale: _isPressed ? 0.96 : 1.0,
-      duration: const Duration(milliseconds: 150),
+      duration: AppMotion.fast,
       curve: Curves.easeOutCubic,
       child: Container(
         margin: widget.margin,
@@ -70,9 +77,9 @@ class _TouchableCardState extends State<TouchableCard> {
           child: InkWell(
             onTap: widget.onTap,
             onLongPress: widget.onLongPress,
-            onTapDown: _onTapDown,
-            onTapUp: _onTapUp,
-            onTapCancel: _onTapCancel,
+            onTapDown: _interactive ? _onTapDown : null,
+            onTapUp: _interactive ? _onTapUp : null,
+            onTapCancel: _interactive ? _onTapCancel : null,
             borderRadius: effectiveRadius,
             splashColor: AppColors.primary.withValues(alpha: 0.15),
             highlightColor: AppColors.primary.withValues(alpha: 0.08),

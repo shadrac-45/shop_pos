@@ -16,6 +16,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/core/utils/date_helpers.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
@@ -75,11 +76,10 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
       backgroundColor: AppColors.cardBg,
       labelStyle: TextStyle(
         color: isSelected ? AppColors.textOnPrimary : AppColors.textPrimary,
-        fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+        fontWeight: FontWeight.w600,
         fontSize: 13,
       ),
-      shape: RoundedRectangleBorder(
-        borderRadius: AppSpacing.borderLg,
+      shape: StadiumBorder(
         side: BorderSide(
           color: isSelected ? AppColors.primary : AppColors.border,
         ),
@@ -94,19 +94,19 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
     required String label,
     required String value,
     required IconData icon,
-    required Color color,
   }) {
+    // Neutral surface: payment methods are categories, not statuses.
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: AppColors.cardBg,
         borderRadius: AppSpacing.borderMd,
-        border: Border.all(color: color.withValues(alpha: 0.25)),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 18),
+          Icon(icon, color: AppColors.textSecondary, size: 18),
           const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -122,10 +122,11 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
               ),
               Text(
                 value,
-                style: TextStyle(
-                  color: color,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
                   fontSize: 15,
                   fontWeight: FontWeight.w800,
+                  fontFeatures: AppText.tabular,
                 ),
               ),
             ],
@@ -238,20 +239,10 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(AppSpacing.lg),
+                        // Same ink slab as the Reports headline figure.
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF1E3A8A), Color(0xFF2563EB)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: AppSpacing.borderLg,
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF2563EB).withValues(alpha: 0.3),
-                              blurRadius: 16,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
+                          color: AppColors.ink,
+                          borderRadius: AppSpacing.borderXl,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -263,7 +254,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                                 const Text(
                                   'TOTAL SALES MADE',
                                   style: TextStyle(
-                                    color: Colors.white70,
+                                    color: AppColors.onInkMuted,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
                                     letterSpacing: 0.8,
@@ -275,7 +266,7 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                                     vertical: 3,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.2),
+                                    color: Colors.white.withValues(alpha: 0.12),
                                     borderRadius: AppSpacing.borderSm,
                                   ),
                                   child: Text(
@@ -295,11 +286,8 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                               alignment: Alignment.centerLeft,
                               child: Text(
                                 CurrencyHelpers.format(stats.totalRevenue),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 32,
-                                  fontWeight: FontWeight.w900,
-                                ),
+                                style: AppText.money(
+                                    size: 34, weight: FontWeight.w800, color: AppColors.onInk),
                               ),
                             ),
                           ],
@@ -317,7 +305,6 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                               value: CurrencyHelpers.formatCompact(
                                   stats.cashRevenue),
                               icon: Icons.payments_rounded,
-                              color: AppColors.cashColor,
                             ),
                           ),
                           const SizedBox(width: AppSpacing.sm),
@@ -327,7 +314,6 @@ class _CashierHistoryScreenState extends ConsumerState<CashierHistoryScreen> {
                               value: CurrencyHelpers.formatCompact(
                                   stats.momoRevenue),
                               icon: Icons.phone_android_rounded,
-                              color: AppColors.momoColor,
                             ),
                           ),
                         ],

@@ -168,7 +168,7 @@ class _PendingMomoScreenState extends ConsumerState<PendingMomoScreen> {
     final payments = _payments;
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Pending MoMo Payments'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Pending MoMo Payments')),
       body: SafeArea(
         child: payments == null
             ? const Center(child: CircularProgressIndicator())

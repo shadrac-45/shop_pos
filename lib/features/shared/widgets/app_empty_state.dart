@@ -1,4 +1,4 @@
-﻿/// ============================================
+/// ============================================
 /// App Empty State — ShopPOS
 /// ============================================
 /// Polished empty state with icon visual, headline,
@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
+import 'package:shop_pos/features/shared/widgets/magic/blur_fade.dart';
 
 class AppEmptyState extends StatelessWidget {
   final IconData icon;
@@ -31,7 +32,7 @@ class AppEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget content = Padding(
+    Widget content = BlurFade(child: Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.xl,
@@ -40,55 +41,54 @@ class AppEmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Icon on two soft rings — reads as "nothing here yet" rather
+          // than as an error.
           Container(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.1),
+            padding: const EdgeInsets.all(10),
+            decoration: const BoxDecoration(
+              color: AppColors.primarySoft,
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              icon,
-              size: 44,
-              color: AppColors.primary,
+            child: Container(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              decoration: const BoxDecoration(
+                color: AppColors.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 36, color: AppColors.primaryDark),
             ),
           ),
-          const SizedBox(height: AppSpacing.md),
+          const SizedBox(height: AppSpacing.lg),
           Text(
             title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                ),
+            style: Theme.of(context).textTheme.headlineSmall,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
-          Text(
-            description,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.textSecondary,
-                  fontSize: 13,
-                ),
-            textAlign: TextAlign.center,
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Text(
+              description,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: AppColors.textSecondary),
+              textAlign: TextAlign.center,
+            ),
           ),
           if (actionLabel != null && onAction != null) ...[
-            const SizedBox(height: AppSpacing.lg),
-            ElevatedButton.icon(
+            const SizedBox(height: AppSpacing.xl),
+            FilledButton(
               onPressed: onAction,
-              icon: const Icon(Icons.auto_awesome_rounded, size: 18),
-              label: Text(actionLabel!),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: AppColors.textOnPrimary,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.xl,
-                  vertical: AppSpacing.md,
-                ),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
               ),
+              child: Text(actionLabel!),
             ),
           ],
         ],
       ),
-    );
+    ));
 
     return LayoutBuilder(
       builder: (context, constraints) {

@@ -20,6 +20,7 @@ import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 import 'package:shop_pos/features/settings/widgets/add_cashier_dialog.dart';
 import 'package:shop_pos/features/settings/widgets/reset_pin_dialog.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 class ManageStaffScreen extends ConsumerStatefulWidget {
   const ManageStaffScreen({super.key});
@@ -51,7 +52,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
   }
 
   Future<void> _openAddCashierDialog() async {
-    final result = await showDialog<bool>(
+    final result = await showAppDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const AddCashierDialog(),
@@ -68,7 +69,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
     final isCurrentlyActive = cashier.isActive;
     final action = isCurrentlyActive ? 'Deactivate' : 'Reactivate';
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.cardBg,
@@ -117,12 +118,12 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
   }
 
   Future<void> _changeRole(AppUser member) async {
-    final role = await showDialog<String>(
+    final role = await showAppDialog<String>(
       context: context,
       builder: (ctx) => SimpleDialog(
         title: Text('Role for ${member.name}'),
         children: [
-          for (final r in AppConstants.staffRoles)
+          for (final r in AppConstants.staffRoles.where(ref.read(staffProvider).canManageRole))
             SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, r),
               child: Row(
@@ -150,7 +151,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
   }
 
   Future<void> _openResetPinDialog(AppUser cashier) async {
-    final result = await showDialog<bool>(
+    final result = await showAppDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => ResetPinDialog(cashier: cashier),
@@ -166,7 +167,6 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
       backgroundColor: AppColors.scaffoldBg,
       appBar: AppBar(
         title: const Text('Manage Staff'),
-        backgroundColor: AppColors.cardBg,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
@@ -488,7 +488,7 @@ class _ManageStaffScreenState extends ConsumerState<ManageStaffScreen> {
                   child: Row(
                     children: [
                       Icon(Icons.lock_reset_rounded,
-                          size: 18, color: AppColors.info),
+                          size: 18, color: AppColors.textSecondary),
                       SizedBox(width: AppSpacing.sm),
                       Text('Reset PIN',
                           style: TextStyle(color: AppColors.textPrimary)),

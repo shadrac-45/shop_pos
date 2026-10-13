@@ -23,6 +23,7 @@ import 'package:shop_pos/features/reports/providers/report_provider.dart';
 import 'package:shop_pos/features/reports/services/report_range.dart';
 import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
+import 'package:shop_pos/features/shared/widgets/glass.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
   const ExpensesScreen({super.key});
@@ -48,7 +49,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   }
 
   Future<void> _add() async {
-    final added = await showDialog<bool>(
+    final added = await showAppDialog<bool>(
       context: context,
       builder: (_) => const _AddExpenseDialog(),
     );
@@ -86,7 +87,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg,
-      appBar: AppBar(title: const Text('Expenses'), backgroundColor: AppColors.cardBg),
+      appBar: AppBar(title: const Text('Expenses')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _add,
         icon: const Icon(Icons.add_rounded),

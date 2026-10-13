@@ -19,11 +19,6 @@ class AppSpacing {
   static const double xl = 24.0;
   static const double xxl = 32.0;
 
-  // Insets
-  static const EdgeInsets pagePadding = EdgeInsets.all(lg);
-  static const EdgeInsets cardPadding = EdgeInsets.all(md);
-  static const EdgeInsets tilePadding = EdgeInsets.symmetric(horizontal: md, vertical: sm);
-
   // Border Radii
   static const double radiusSm = 8.0;
   static const double radiusMd = 12.0;
@@ -42,7 +37,6 @@ class AppTouch {
   /// Touch-first workflow: minimum 48x48 dp touch targets
   static const double minTargetSize = 48.0;
   static const double buttonHeight = 52.0;
-  static const double iconButtonSize = 48.0;
   static const BoxConstraints touchConstraints = BoxConstraints(
     minWidth: minTargetSize,
     minHeight: minTargetSize,

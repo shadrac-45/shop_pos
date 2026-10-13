@@ -8,6 +8,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -83,12 +84,7 @@ class _ResetPinDialogState extends ConsumerState<ResetPinDialog> {
           _pinError = 'PIN must be 4 to 6 digits and not a default PIN';
         });
       default:
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to reset PIN. Please try again.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        context.showErrorSnackbar('Failed to reset PIN. Please try again.');
     }
   }
 
@@ -145,12 +141,12 @@ class _ResetPinDialogState extends ConsumerState<ResetPinDialog> {
                   Container(
                     padding: const EdgeInsets.all(AppSpacing.sm),
                     decoration: BoxDecoration(
-                      color: AppColors.info.withValues(alpha: 0.15),
+                      color: AppColors.primaryLight,
                       borderRadius: AppSpacing.borderMd,
                     ),
                     child: const Icon(
                       Icons.lock_reset_rounded,
-                      color: AppColors.info,
+                      color: AppColors.primaryDark,
                       size: 22,
                     ),
                   ),
@@ -299,8 +295,8 @@ class _ResetPinDialogState extends ConsumerState<ResetPinDialog> {
                           : const Icon(Icons.lock_reset_rounded),
                       label: Text(_isSaving ? 'Saving…' : 'Reset PIN'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.info,
-                        foregroundColor: Colors.white,
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: AppColors.textOnPrimary,
                         padding:
                             const EdgeInsets.symmetric(vertical: AppSpacing.md),
                       ),

@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -56,12 +57,7 @@ class _ChangePinDialogState extends ConsumerState<ChangePinDialog> {
     // 1. Verify Current PIN
     if (!HashHelpers.verifyPin(currentPin, widget.user.pinHash)) {
       HapticFeedback.vibrate();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Current PIN is incorrect.'),
-          backgroundColor: AppColors.danger,
-        ),
-      );
+      context.showErrorSnackbar('Current PIN is incorrect.');
       return;
     }
 

@@ -37,6 +37,13 @@ import 'package:shop_pos/features/sales/screens/sale_detail_screen.dart';
 import 'package:shop_pos/features/shared/widgets/app_empty_state.dart';
 import 'package:shop_pos/features/shared/widgets/touchable_card.dart';
 import 'package:shop_pos/features/shared/widgets/ui_helpers.dart';
+import 'package:shop_pos/core/theme/app_motion.dart';
+import 'package:shop_pos/core/theme/app_theme.dart';
+import 'package:shop_pos/features/shared/widgets/app_skeleton.dart';
+import 'package:shop_pos/features/shared/widgets/magic/magic.dart';
+import 'package:shop_pos/features/products/models/product.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
+import 'package:shop_pos/features/products/providers/product_provider.dart';
 
 class DailyReportScreen extends ConsumerStatefulWidget {
   const DailyReportScreen({super.key});
@@ -107,33 +114,48 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
     final range = notifier.range;
 
     return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: RefreshIndicator(
           color: AppColors.primary,
           onRefresh: notifier.refresh,
-          child: ListView(
+          child: LayoutBuilder(builder: (context, constraints) => ListView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(AppSpacing.lg),
+            // Wide screens: a centred column, so figures stay near labels.
+            padding: EdgeInsets.symmetric(
+              horizontal: constraints.maxWidth > 1040
+                  ? (constraints.maxWidth - 1000) / 2
+                  : AppSpacing.lg,
+              vertical: AppSpacing.sm,
+            ),
             children: [
               _buildPeriodBar(range, reportAsync.valueOrNull),
               const SizedBox(height: AppSpacing.md),
               reportAsync.when(
-                loading: () => const Padding(
-                  padding: EdgeInsets.all(AppSpacing.xxl),
-                  child: Center(child: CircularProgressIndicator()),
+                loading: () => const Column(
+                  children: [
+                    AppSkeletonLoader.card(height: 132),
+                    SizedBox(height: AppSpacing.md),
+                    Row(children: [
+                      Expanded(child: AppSkeletonLoader.card(height: 72)),
+                      SizedBox(width: AppSpacing.md),
+                      Expanded(child: AppSkeletonLoader.card(height: 72)),
+                    ]),
+                    SizedBox(height: AppSpacing.md),
+                    AppSkeletonLoader.card(height: 220),
+                  ],
                 ),
                 error: (e, _) => AppEmptyState(
                   icon: Icons.error_outline_rounded,
                   title: 'Could not load the report',
-                  description: '$e',
+                  description: errorMessage(e),
                   actionLabel: 'Retry',
                   onAction: notifier.refresh,
                 ),
                 data: _buildReport,
               ),
             ],
-          ),
+          )),
         ),
       ),
     );
@@ -149,9 +171,10 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
           selected: selected,
           onSelected: (_) => _setRange(ReportRange.of(p)),
           selectedColor: AppColors.primary,
+          side: BorderSide(color: selected ? AppColors.primary : AppColors.border),
           labelStyle: TextStyle(
             color: selected ? AppColors.textOnPrimary : AppColors.textPrimary,
-            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            fontWeight: FontWeight.w600,
           ),
           showCheckmark: false,
         ),
@@ -176,7 +199,7 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
                 label: Text(range.period == ReportPeriod.custom ? range.label : 'Pick dates'),
                 onPressed: _pickCustomRange,
                 backgroundColor: range.period == ReportPeriod.custom
-                    ? AppColors.primary.withValues(alpha: 0.15)
+                    ? AppColors.primaryLight
                     : null,
               ),
             ],
@@ -225,13 +248,15 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
                 r.netProfit >= 0 ? AppColors.success : AppColors.danger)),
           ],
         ),
+        const SizedBox(height: AppSpacing.md),
+        const _StockHealthCard(),
         if (r.unitsWithoutCost > 0)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: Text(
               '${r.unitsWithoutCost} unit${r.unitsWithoutCost == 1 ? '' : 's'} sold had no '
               'cost price, so profit is overstated. Add cost prices in Edit Product or Restock.',
-              style: const TextStyle(color: AppColors.warning, fontSize: 12),
+              style: const TextStyle(color: AppColors.warningDarkText, fontSize: 12),
             ),
           ),
         const SizedBox(height: AppSpacing.md),
@@ -274,7 +299,7 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
                         const SizedBox(width: AppSpacing.sm),
                         Expanded(child: Text(AppConstants.paymentLabel(e.key))),
                         Text(CurrencyHelpers.format(e.value),
-                            style: const TextStyle(fontWeight: FontWeight.w800)),
+                            style: AppText.money(size: 15, weight: FontWeight.w800)),
                       ],
                     ),
                   ),
@@ -333,59 +358,100 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
     );
   }
 
+  /// Headline figure on the ink slab, counting up when the period changes.
   Widget _bigKpi(String label, double value, {required String subtitle}) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [AppColors.primaryDark, AppColors.primary],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: AppSpacing.borderLg,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label.toUpperCase(),
-              style: const TextStyle(
-                  color: Colors.white70, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(CurrencyHelpers.format(value),
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 32, fontWeight: FontWeight.w900)),
+    return BlurFade(
+      child: ClipRRect(
+        borderRadius: AppSpacing.borderXl,
+        child: Container(
+          color: AppColors.ink,
+          child: Stack(
+            children: [
+              const Positioned.fill(
+                child: DotPattern(color: Color(0x22A3ADA8), fadeCenter: Alignment.topRight),
+              ),
+              const Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      center: Alignment(1, -1),
+                      radius: 1.2,
+                      colors: [Color(0x40047857), Color(0x00047857)], // primary glow
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.xl),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label.toUpperCase(),
+                        style: AppText.overline.copyWith(color: AppColors.onInkMuted)),
+                    const SizedBox(height: AppSpacing.xs),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: NumberTicker(
+                        value: value,
+                        startValue: 0,
+                        format: CurrencyHelpers.format,
+                        style: AppText.money(size: 36, weight: FontWeight.w800, color: AppColors.onInk),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: AppColors.onInkMuted, fontSize: 14, fontFeatures: AppText.tabular)),
+                  ],
+                ),
+              ),
+            ],
           ),
-          Text(subtitle, style: const TextStyle(color: Colors.white70)),
-        ],
+        ),
       ),
     );
   }
 
   Widget _kpi(String label, double value, IconData icon, Color color) {
-    return TouchableCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      child: Row(
-        children: [
-          Icon(icon, color: color),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(CurrencyHelpers.format(value),
-                      style: TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.w800, color: color)),
-                ),
-              ],
+    return BlurFade(
+      delay: AppMotion.stagger,
+      child: TouchableCard(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: AppSpacing.borderMd,
+              ),
+              child: Icon(icon, color: color, size: 22),
             ),
-          ),
-        ],
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(
+                          color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w500)),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: NumberTicker(
+                      value: value,
+                      startValue: 0,
+                      format: CurrencyHelpers.format,
+                      style: AppText.money(size: 20, weight: FontWeight.w800, color: color),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -394,6 +460,7 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
     final style = TextStyle(
       fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
       color: muted ? AppColors.textSecondary : AppColors.textPrimary,
+      fontFeatures: AppText.tabular,
     );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -537,6 +604,96 @@ class _DailyReportScreenState extends ConsumerState<DailyReportScreen> {
         onTap: () => Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => SaleDetailScreen(saleId: s.id)))
             .then((_) => ref.read(reportProvider.notifier).refresh()),
+      ),
+    );
+  }
+}
+
+/// Live stock health, independent of the report period: how many products
+/// are low, out, expiring soon or expired (rules in product_status.dart).
+/// A zero stays gray so the card only draws the eye when something needs
+/// doing.
+class _StockHealthCard extends ConsumerWidget {
+  const _StockHealthCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // One pass over the catalogue, reading each product's cached status.
+    var low = 0, out = 0, soon = 0, expired = 0;
+    for (final p in ref.watch(productServiceProvider).valueOrNull ?? const <Product>[]) {
+      if (p.isArchived) continue;
+      final h = p.health;
+      if (h.stock == StockLevel.low) low++;
+      if (h.stock == StockLevel.out) out++;
+      if (h.shelfExpiry == ExpiryState.soon) soon++;
+      if (h.shelfExpiry == ExpiryState.expired) expired++;
+    }
+    final cells = [
+      ('Low stock', low, Icons.inventory_2_rounded, AppTone.warning),
+      ('Out of stock', out, Icons.remove_shopping_cart_rounded, AppTone.danger),
+      ('Expiring soon', soon, Icons.schedule_rounded, AppTone.warning),
+      ('Expired', expired, Icons.event_busy_rounded, AppTone.danger),
+    ];
+
+    return TouchableCard(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.health_and_safety_outlined, size: 18, color: AppColors.textSecondary),
+              SizedBox(width: AppSpacing.sm),
+              Text('Stock health',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              Spacer(),
+              Text('Now', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          LayoutBuilder(builder: (context, c) {
+            final perRow = c.maxWidth >= 520 ? 4 : 2;
+            final w = (c.maxWidth - AppSpacing.sm * (perRow - 1)) / perRow;
+            return Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: [
+                for (final (label, count, icon, tone) in cells)
+                  SizedBox(
+                    width: w,
+                    child: Container(
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      decoration: BoxDecoration(
+                        color: count > 0 ? tone.tint : AppColors.scaffoldBg,
+                        borderRadius: AppSpacing.borderMd,
+                        border: Border.all(color: count > 0 ? tone.border : AppColors.border),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(icon, size: 18, color: count > 0 ? tone.fg : AppColors.textMuted),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Text(label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: count > 0 ? tone.text : AppColors.textSecondary)),
+                          ),
+                          Text('$count',
+                              style: AppText.money(
+                                  size: 18,
+                                  weight: FontWeight.w800,
+                                  color: count > 0 ? tone.text : AppColors.textMuted)),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          }),
+        ],
       ),
     );
   }
