@@ -21,6 +21,8 @@
 library;
 
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:bcrypt/bcrypt.dart';
 import 'package:crypto/crypto.dart';
@@ -63,15 +65,35 @@ class HashHelpers {
   static bool isDefaultPinHash(String storedHash) =>
       AppConstants.defaultPins.any((pin) => verifyPin(pin, storedHash));
 
-  /// Index of the first hash in [hashes] that [rawPin] matches, or -1.
-  /// Runs in a background isolate.
-  static Future<int> findPinMatch(String rawPin, List<String> hashes) =>
-      compute(_findPinMatch, (rawPin, hashes));
+  /// Most background isolates a PIN search uses at once.
+  static const _maxPinWorkers = 4;
 
-  static int _findPinMatch((String, List<String>) args) {
-    final (pin, hashes) = args;
+  /// Index of the first hash in [hashes] that [rawPin] matches, or -1.
+  ///
+  /// Each check is a deliberately slow bcrypt, and sign-in tries every
+  /// account, so the accounts are split across a few background isolates
+  /// (one per spare core, up to [_maxPinWorkers]) and checked in parallel.
+  static Future<int> findPinMatch(String rawPin, List<String> hashes) async {
+    final workers = math.min(
+        math.min(hashes.length, _maxPinWorkers), math.max(1, Platform.numberOfProcessors - 1));
+    if (workers <= 1) return compute(_findPinMatch, (rawPin, hashes, 0));
+    final size = (hashes.length / workers).ceil();
+    final found = await Future.wait([
+      for (var start = 0; start < hashes.length; start += size)
+        compute(_findPinMatch,
+            (rawPin, hashes.sublist(start, math.min(start + size, hashes.length)), start)),
+    ]);
+    // Lowest index wins, exactly as a single pass in order would.
+    for (final i in found) {
+      if (i >= 0) return i; // chunks are in order
+    }
+    return -1;
+  }
+
+  static int _findPinMatch((String, List<String>, int) args) {
+    final (pin, hashes, offset) = args;
     for (var i = 0; i < hashes.length; i++) {
-      if (verifyPin(pin, hashes[i])) return i;
+      if (verifyPin(pin, hashes[i])) return offset + i;
     }
     return -1;
   }

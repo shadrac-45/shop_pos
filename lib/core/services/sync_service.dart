@@ -42,7 +42,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 
+import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
+import 'package:shop_pos/features/customers/models/customer.dart';
 import 'package:shop_pos/core/utils/hash_helpers.dart';
 import 'package:shop_pos/core/utils/id_helpers.dart';
 import 'package:shop_pos/features/activity/models/activity_log.dart';
@@ -70,6 +72,11 @@ class SyncResult {
   /// signed in again.
   final bool unauthorized;
 
+  /// Changes held back because the person who made them has no cloud
+  /// session on this till yet (they go up once that person signs in).
+  final int waiting;
+  final String? waitingFor;
+
   const SyncResult({
     required this.pushed,
     required this.pulled,
@@ -78,6 +85,8 @@ class SyncResult {
     this.conflicts = 0,
     this.warnings = 0,
     this.unauthorized = false,
+    this.waiting = 0,
+    this.waitingFor,
   });
 
   bool get ok => error == null;
@@ -85,7 +94,9 @@ class SyncResult {
 
 /// Order in which collections are pushed: referenced records first.
 const cloudPushOrder = [
+  'settings',
   'users',
+  'customers',
   'products',
   'batches',
   'sales',
@@ -121,11 +132,13 @@ class SyncService {
     required String baseUrl,
     Dio? dio,
     bool checkConnectivity = true,
+    int? signedInUserId,
   }) async {
     final now = DateTime.now();
     final settings = await isar.storeSettings.get(1) ?? StoreSettings();
     if (settings.cloudDeviceToken.isNotEmpty && settings.cloudUrl.isNotEmpty) {
-      return cloudSync(isar, dio: dio, checkConnectivity: checkConnectivity);
+      return cloudSync(isar,
+          dio: dio, checkConnectivity: checkConnectivity, signedInUserId: signedInUserId);
     }
     if (baseUrl.isEmpty || settings.syncServerKey.isEmpty) {
       return SyncResult(
@@ -220,6 +233,7 @@ class SyncService {
     Isar isar, {
     Dio? dio,
     bool checkConnectivity = true,
+    int? signedInUserId,
   }) async {
     final now = DateTime.now();
     final settings = await isar.storeSettings.get(1) ?? StoreSettings();
@@ -235,52 +249,130 @@ class SyncService {
           connectTimeout: const Duration(seconds: 20),
           receiveTimeout: const Duration(seconds: 90),
         ));
-    final options = Options(headers: {'x-device-token': settings.cloudDeviceToken});
 
+    // Who can sync: everyone with a live cloud session on this till.
+    final users = await isar.appUsers.where().findAll();
+    final byId = {for (final u in users) u.id: u};
+    bool live(AppUser? u) =>
+        u != null &&
+        u.isActive &&
+        (u.cloudToken ?? '').isNotEmpty &&
+        (u.cloudTokenExpiresAt == null || u.cloudTokenExpiresAt!.isAfter(now));
+    final me = signedInUserId == null ? null : byId[signedInUserId];
+    final meLive = live(me);
+    Options opts(AppUser u) => Options(headers: {
+          'x-device-token': settings.cloudDeviceToken,
+          'authorization': 'Bearer ${u.cloudToken}',
+        });
+
+    var pushed = 0, conflicts = 0, warnings = 0, waiting = 0;
+    String? waitingFor;
     try {
-      // ── Push ──
+      // ── Push: each person's changes go up with their own session ──
       final changes = await collectChanges(isar, since: settings.lastSyncAt, forCloud: true);
-      var pushed = 0, conflicts = 0, warnings = 0;
-      for (final name in cloudPushOrder) {
-        final rows = changes.collections[name] ?? const [];
-        for (var i = 0; i < rows.length; i += cloudChunkSize) {
-          final chunk = rows.sublist(i, i + cloudChunkSize > rows.length ? rows.length : i + cloudChunkSize);
-          final r = await client.post<Map<String, dynamic>>(
-            '/sync/push',
-            data: {
-              // Lets the server answer a repeat of this exact request from
-              // its record instead of re-applying it.
-              'batchId': IdHelpers.newUuid(),
-              'collections': {name: chunk},
-            },
-            options: options,
-          );
-          final body = r.data ?? const {};
-          conflicts += (body['conflicts'] as List? ?? const []).length;
-          warnings += (body['warnings'] as List? ?? const []).length;
-          for (final c in body['conflicts'] as List? ?? const []) {
-            debugPrint('[Sync] refused by cloud: $c');
+      final groups = <int, Map<String, List<int>>>{}; // actor → collection → row indexes
+      for (final entry in changes.actors.entries) {
+        for (var i = 0; i < entry.value.length; i++) {
+          final recorded = entry.value[i];
+          final actor = byId[recorded ?? -1];
+          int? sender;
+          if (live(actor)) {
+            sender = actor!.id;
+          } else if (meLive &&
+              (recorded == null ||
+                  entry.key == 'activityLogs' ||
+                  Permissions.can(me, Permission.viewReports))) {
+            // Records with no recorded author, log lines, and — for a
+            // manager/owner — other people's records go up as the
+            // signed-in person (the cloud records them as the sender).
+            sender = me!.id;
           }
-          pushed += chunk.length;
+          if (sender == null) {
+            waiting++;
+            waitingFor ??= actor?.name;
+            continue;
+          }
+          groups.putIfAbsent(sender, () => {}).putIfAbsent(entry.key, () => []).add(i);
+        }
+      }
+
+      final done = <String, List<int>>{}; // collection → local ids now synced
+      for (final g in groups.entries) {
+        final sender = byId[g.key]!;
+        for (final name in cloudPushOrder) {
+          final idx = g.value[name] ?? const <int>[];
+          for (var i = 0; i < idx.length; i += cloudChunkSize) {
+            final part = idx.sublist(i, i + cloudChunkSize > idx.length ? idx.length : i + cloudChunkSize);
+            final rows = [for (final k in part) changes.collections[name]![k]];
+            try {
+              final r = await client.post<Map<String, dynamic>>(
+                '/sync/push',
+                data: {
+                  // Lets the server answer a repeat of this exact request
+                  // from its record instead of re-applying it.
+                  'batchId': IdHelpers.newUuid(),
+                  'collections': {name: rows},
+                },
+                options: opts(sender),
+              );
+              final body = r.data ?? const {};
+              conflicts += (body['conflicts'] as List? ?? const []).length;
+              warnings += (body['warnings'] as List? ?? const []).length;
+              for (final c in body['conflicts'] as List? ?? const []) {
+                debugPrint('[Sync] refused by cloud: $c');
+              }
+              pushed += rows.length;
+              done.putIfAbsent(name, () => []).addAll([for (final k in part) changes.ids[name]![k]]);
+            } on DioException catch (e) {
+              final code = e.response?.data is Map ? (e.response!.data as Map)['error'] : null;
+              if (e.response?.statusCode == 401 && code != 'unauthorized') {
+                // This person's session ended (logout elsewhere, PIN
+                // change, expiry): keep their changes until they sign in.
+                await _clearToken(isar, sender.id);
+                waiting += idx.length - i;
+                waitingFor ??= sender.name;
+                break;
+              }
+              rethrow;
+            }
+          }
         }
       }
       // Refused records are marked synced too, so one bad record can't
       // block the queue forever; the conflict count is shown to the user.
-      await _markSynced(isar, changes);
+      await _markCloudSynced(isar, changes, done);
 
-      // ── Pull ──
+      // ── Pull: as the signed-in person (what their role may see) ──
+      if (!meLive) {
+        await _saveSyncTime(isar, now);
+        return SyncResult(
+            pushed: pushed, pulled: 0, at: now, conflicts: conflicts, warnings: warnings,
+            waiting: waiting, waitingFor: waitingFor,
+            error: me == null ? null : 'Sign in again while online to receive updates.');
+      }
       var cursor = settings.cloudCursor;
       var pulled = 0;
       Map<String, dynamic>? shop;
+      String? scope;
+      String? deviceCode;
       for (var page = 0; page < 50; page++) {
         final response = await client.get<Map<String, dynamic>>(
           '/sync/pull',
           queryParameters: {'cursor': cursor},
-          options: options,
+          options: opts(me!),
         );
         final data = response.data ?? const {};
+        scope = data['scope'] as String? ?? scope;
+        deviceCode = data['deviceCode'] as String? ?? deviceCode;
+        // A manager/owner on a till that so far only held a cashier's view:
+        // download everything once.
+        if (page == 0 && scope == 'full' && settings.cloudCursorScope == 'limited' && cursor.isNotEmpty) {
+          cursor = '';
+          settings.cloudCursorScope = 'full';
+          continue;
+        }
         final remote = <String, List<Map<String, dynamic>>>{
-          for (final name in pulledCollections)
+          for (final name in [...pulledCollections, 'customers'])
             name: [
               for (final r in data[name] as List? ?? const [])
                 Map<String, dynamic>.from(r as Map)
@@ -294,6 +386,7 @@ class SyncService {
           final s = await isar.storeSettings.get(1);
           if (s != null) {
             s.cloudCursor = cursor;
+            if (scope != null && s.cloudCursorScope != 'full') s.cloudCursorScope = scope;
             await isar.storeSettings.put(s);
           }
         });
@@ -303,25 +396,98 @@ class SyncService {
       await isar.writeTxn(() async {
         final s = await isar.storeSettings.get(1);
         if (s == null) return;
-        if (shop != null) _applyShop(s, shop);
+        // Local settings edits not yet uploaded win until they are.
+        if (shop != null && s.settingsSynced) _applyShop(s, shop);
+        if (deviceCode != null && deviceCode.isNotEmpty) s.cloudDeviceCode = deviceCode;
         s.lastSyncAt = now;
         await isar.storeSettings.put(s);
       });
       return SyncResult(
-          pushed: pushed, pulled: pulled, at: now, conflicts: conflicts, warnings: warnings);
+          pushed: pushed, pulled: pulled, at: now, conflicts: conflicts, warnings: warnings,
+          waiting: waiting, waitingFor: waitingFor);
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       final body = e.response?.data;
-      final message = status == 401
+      final code = body is Map ? body['error'] : null;
+      if (status == 401 && code == 'session_required' && me != null) await _clearToken(isar, me.id);
+      final message = status == 401 && code == 'unauthorized'
           ? 'This till is no longer connected to the cloud. Sign in again in Settings → Integrations.'
-          : (body is Map ? body['message']?.toString() : null) ??
-              'Could not reach ShopPOS Cloud. Will retry automatically.';
+          : status == 401
+              ? 'Your cloud sign-in ended. Sign in again to sync.'
+              : status == 403
+                  ? 'Your account is not assigned to this till\'s shop.'
+                  : (body is Map ? body['message']?.toString() : null) ??
+                      'Could not reach ShopPOS Cloud. Will retry automatically.';
       debugPrint('[Sync] cloud: $message (${e.type})');
-      return SyncResult(pushed: 0, pulled: 0, at: now, error: message, unauthorized: status == 401);
+      return SyncResult(
+          pushed: pushed, pulled: 0, at: now, error: message,
+          unauthorized: status == 401 && code == 'unauthorized');
     } catch (e, st) {
       debugPrint('[Sync] cloud failed: $e\n$st');
-      return SyncResult(pushed: 0, pulled: 0, at: now, error: 'Sync failed: $e');
+      return SyncResult(pushed: pushed, pulled: 0, at: now, error: 'Sync failed: $e');
     }
+  }
+
+  static Future<void> _clearToken(Isar isar, int userId) async {
+    await isar.writeTxn(() async {
+      final u = await isar.appUsers.get(userId);
+      if (u == null) return;
+      u
+        ..cloudToken = null
+        ..cloudTokenExpiresAt = null;
+      await isar.appUsers.put(u);
+    });
+  }
+
+  static Future<void> _saveSyncTime(Isar isar, DateTime at) async {
+    await isar.writeTxn(() async {
+      final s = await isar.storeSettings.get(1);
+      if (s == null) return;
+      s.lastSyncAt = at;
+      await isar.storeSettings.put(s);
+    });
+  }
+
+  /// Marks the records in [done] synced — unless edited while syncing.
+  static Future<void> _markCloudSynced(
+      Isar isar, SyncChangeSet c, Map<String, List<int>> done) async {
+    await isar.writeTxn(() async {
+      Future<void> mark<T>(IsarCollection<T> col, String name, void Function(T) set,
+          {Object? Function(T)? stamp, int Function(T)? id}) async {
+        final ids = done[name] ?? const <int>[];
+        if (ids.isEmpty) return;
+        final before = c.stamps[name];
+        final rows = (await col.getAll(ids))
+            .whereType<T>()
+            .where((r) => before == null || stamp == null || before[id!(r)] == stamp(r))
+            .toList();
+        for (final r in rows) {
+          set(r);
+        }
+        await col.putAll(rows);
+      }
+
+      await mark<Product>(isar.products, 'products', (r) => r.isSynced = true,
+          stamp: (r) => r.updatedAt, id: (r) => r.id);
+      await mark<Batch>(isar.batchs, 'batches', (r) => r.isSynced = true);
+      await mark<Sale>(isar.sales, 'sales', (r) => r.isSynced = true,
+          stamp: (r) => r.updatedAt, id: (r) => r.id);
+      await mark<StockMovement>(isar.stockMovements, 'stockMovements', (r) => r.isSynced = true);
+      await mark<Expense>(isar.expenses, 'expenses', (r) => r.isSynced = true,
+          stamp: (r) => r.updatedAt, id: (r) => r.id);
+      await mark<Shift>(isar.shifts, 'shifts', (r) => r.isSynced = true);
+      await mark<AppUser>(isar.appUsers, 'users', (r) => r.isSynced = true,
+          stamp: (r) => '${r.updatedAt}|${r.pinHash}|${r.isActive}', id: (r) => r.id);
+      await mark<Customer>(isar.customers, 'customers', (r) => r.isSynced = true,
+          stamp: (r) => r.updatedAt, id: (r) => r.id);
+      if ((done['settings'] ?? const []).isNotEmpty) {
+        final s = await isar.storeSettings.get(1);
+        if (s != null && s.settingsUpdatedAt == c.settingsStamp) {
+          s.settingsSynced = true;
+          await isar.storeSettings.put(s);
+        }
+      }
+    });
   }
 
   /// Applies the cloud shop's settings when they changed online.
@@ -360,6 +526,8 @@ class SyncService {
         isar.batchs.watchLazy(),
         isar.expenses.watchLazy(),
         isar.appUsers.watchLazy(),
+        isar.customers.watchLazy(),
+        isar.storeSettings.watchLazy(),
       ];
 
   /// Number of local records waiting to be synced.
@@ -372,6 +540,7 @@ class SyncService {
       isar.expenses.filter().isSyncedEqualTo(false).count(),
       isar.appUsers.filter().isSyncedEqualTo(false).count(),
       isar.shifts.filter().isSyncedEqualTo(false).count(),
+      isar.customers.filter().isSyncedEqualTo(false).count(),
     ]);
     return counts.fold<int>(0, (s, c) => s + c);
   }
@@ -396,6 +565,7 @@ class SyncService {
       await all<Expense>(isar.expenses, (r) => r.isSynced = false);
       await all<Shift>(isar.shifts, (r) => r.isSynced = false);
       await all<AppUser>(isar.appUsers, (r) => r.isSynced = false);
+      await all<Customer>(isar.customers, (r) => r.isSynced = false);
     });
   }
 
@@ -445,6 +615,7 @@ class SyncService {
       changed += await _applySaleItems(isar, rows('saleItems'));
       changed += await _applyMovements(isar, rows('stockMovements'));
       changed += await _applyExpenses(isar, rows('expenses'));
+      changed += await _applyCustomers(isar, rows('customers'));
     });
     return changed;
   }
@@ -469,7 +640,7 @@ class SyncService {
     for (final r in rows) {
       final uuid = r['uuid'] as String?;
       if (uuid == null) continue;
-      var product = await isar.products.filter().uuidEqualTo(uuid).findFirst();
+      var product = await isar.products.where().uuidEqualTo(uuid).findFirst();
       if (product != null && !_remoteWins(product.updatedAt, r['updatedAt'])) continue;
       product ??= Product()..uuid = uuid;
       product
@@ -509,6 +680,8 @@ class SyncService {
       final version = (r['credentialVersion'] as num?)?.toInt();
       // A PIN reset elsewhere ends sessions here too.
       if (version != null && version > user.credentialVersion) user.credentialVersion = version;
+      final username = r['username'];
+      if (username is String) user.username = username;
       user
         ..name = r['name'] as String? ?? 'Staff'
         ..role = r['role'] as String? ?? 'cashier'
@@ -527,7 +700,7 @@ class SyncService {
   }
 
   static Future<Product?> _localProduct(Isar isar, Object? uuid) async =>
-      uuid is String ? isar.products.filter().uuidEqualTo(uuid).findFirst() : null;
+      uuid is String ? isar.products.where().uuidEqualTo(uuid).findFirst() : null;
 
   static Future<int> _applyBatches(Isar isar, List<Map<String, dynamic>> rows) async {
     var changed = 0;
@@ -538,7 +711,7 @@ class SyncService {
       if (product == null) continue;
       // Only new batches are created; quantity is never copied but rebuilt
       // from stock movements, and batch details don't change after restock.
-      if (await isar.batchs.filter().uuidEqualTo(uuid).isNotEmpty()) continue;
+      if (await isar.batchs.where().uuidEqualTo(uuid).isNotEmpty()) continue;
       final expiry = _date(r['expiryDate']);
       if (expiry == null) continue;
       final batch = Batch()
@@ -564,13 +737,17 @@ class SyncService {
     for (final r in rows) {
       final uuid = r['uuid'] as String?;
       if (uuid == null) continue;
-      var sale = await isar.sales.filter().uuidEqualTo(uuid).findFirst();
+      var sale = await isar.sales.where().uuidEqualTo(uuid).findFirst();
       if (sale != null && !_remoteWins(sale.updatedAt, r['updatedAt'])) continue;
       final isNew = sale == null;
       sale ??= Sale()
         ..uuid = uuid
         ..timestamp = _date(r['timestamp']) ?? DateTime.now()
         ..itemsJson = '[]';
+      // The receipt number printed by the till that made the sale — the
+      // same on every device.
+      final receipt = r['receiptNumber'];
+      if (receipt is String && RegExp(r'^T\d+-\d+$').hasMatch(receipt)) sale.receiptNo = receipt;
       sale
         ..cashierId = await _localUserId(isar, r['cashierUuid'])
         ..paymentType = r['paymentType'] as String? ?? 'cash'
@@ -609,7 +786,7 @@ class SyncService {
         // reconciled one might arrive twice: keep the first.
         final ref = sale.paystackReference;
         if (ref != null &&
-            await isar.sales.filter().paystackReferenceEqualTo(ref).isNotEmpty()) {
+            await isar.sales.where().paystackReferenceEqualTo(ref).isNotEmpty()) {
           continue;
         }
       }
@@ -626,10 +803,10 @@ class SyncService {
       final uuid = r['uuid'] as String?;
       final saleUuid = r['saleUuid'] as String?;
       if (uuid == null || saleUuid == null) continue;
-      final sale = await isar.sales.filter().uuidEqualTo(saleUuid).findFirst();
+      final sale = await isar.sales.where().uuidEqualTo(saleUuid).findFirst();
       if (sale == null) continue;
       final product = await _localProduct(isar, r['productUuid']);
-      var item = await isar.saleItems.filter().uuidEqualTo(uuid).findFirst();
+      var item = await isar.saleItems.where().uuidEqualTo(uuid).findFirst();
       item ??= SaleItem()
         ..uuid = uuid
         ..saleId = sale.id
@@ -652,7 +829,7 @@ class SyncService {
     // Keep the sale's item summary (used by history search) in step.
     for (final saleId in itemsJsonDirty) {
       final sale = await isar.sales.get(saleId);
-      final items = await isar.saleItems.filter().saleIdEqualTo(saleId).findAll();
+      final items = await isar.saleItems.where().saleIdEqualTo(saleId).findAll();
       if (sale == null) continue;
       sale.itemsJson = _itemsJson(items);
       await isar.sales.put(sale);
@@ -681,7 +858,7 @@ class SyncService {
     for (final r in sorted) {
       final uuid = r['uuid'] as String?;
       if (uuid == null) continue;
-      if (await isar.stockMovements.filter().uuidEqualTo(uuid).isNotEmpty()) continue;
+      if (await isar.stockMovements.where().uuidEqualTo(uuid).isNotEmpty()) continue;
       final product = await _localProduct(isar, r['productUuid']);
       if (product == null) continue;
       final change = (r['quantityChange'] as num?)?.toInt() ?? 0;
@@ -689,10 +866,10 @@ class SyncService {
       Batch? batch;
       final batchUuid = r['batchUuid'];
       if (batchUuid is String) {
-        batch = await isar.batchs.filter().uuidEqualTo(batchUuid).findFirst();
+        batch = await isar.batchs.where().uuidEqualTo(batchUuid).findFirst();
       }
       batch ??= await isar.batchs
-          .filter()
+          .where()
           .productIdEqualTo(product.id)
           .sortByExpiryDateDesc()
           .findFirst();
@@ -712,7 +889,7 @@ class SyncService {
 
       final saleUuid = r['saleUuid'];
       final sale = saleUuid is String
-          ? await isar.sales.filter().uuidEqualTo(saleUuid).findFirst()
+          ? await isar.sales.where().uuidEqualTo(saleUuid).findFirst()
           : null;
       await isar.stockMovements.put(StockMovement()
         ..uuid = uuid
@@ -737,12 +914,33 @@ class SyncService {
     return changed;
   }
 
+  static Future<int> _applyCustomers(Isar isar, List<Map<String, dynamic>> rows) async {
+    var changed = 0;
+    for (final r in rows) {
+      final uuid = r['uuid'] as String?;
+      if (uuid == null) continue;
+      var customer = await isar.customers.where().uuidEqualTo(uuid).findFirst();
+      if (customer != null && !_remoteWins(customer.updatedAt, r['updatedAt'])) continue;
+      customer ??= Customer()..uuid = uuid;
+      customer
+        ..name = r['name'] as String? ?? 'Customer'
+        ..phone = r['phone'] as String?
+        ..email = r['email'] as String?
+        ..notes = r['notes'] as String?
+        ..updatedAt = _date(r['updatedAt']) ?? DateTime.now()
+        ..isSynced = true;
+      await isar.customers.put(customer);
+      changed++;
+    }
+    return changed;
+  }
+
   static Future<int> _applyExpenses(Isar isar, List<Map<String, dynamic>> rows) async {
     var changed = 0;
     for (final r in rows) {
       final uuid = r['uuid'] as String?;
       if (uuid == null) continue;
-      var expense = await isar.expenses.filter().uuidEqualTo(uuid).findFirst();
+      var expense = await isar.expenses.where().uuidEqualTo(uuid).findFirst();
       if (expense != null && !_remoteWins(expense.updatedAt, r['updatedAt'])) continue;
       expense ??= Expense()..uuid = uuid;
       expense
@@ -799,10 +997,27 @@ class SyncService {
     final items = <SaleItem>[];
     for (final s in sales) {
       saleUuids[s.id] = s.uuid;
-      items.addAll(await isar.saleItems.filter().saleIdEqualTo(s.id).findAll());
+      items.addAll(await isar.saleItems.where().saleIdEqualTo(s.id).findAll());
     }
     final settings = await isar.storeSettings.get(1);
     final device = settings?.deviceId ?? '';
+
+    // Cloud only: customers and the shop settings changed on this till.
+    final customers = forCloud
+        ? await isar.customers.filter().isSyncedEqualTo(false).findAll()
+        : const <Customer>[];
+    final settingsDirty = forCloud && settings != null && !settings.settingsSynced;
+
+    // Who made each change (local user ids), so the cloud can be told
+    // with that person's own session. A batch takes the author of its
+    // first stock movement; a sale line takes its sale's.
+    final batchActor = <int, int?>{};
+    for (final b in batches) {
+      final first = await isar.stockMovements.filter().batchIdEqualTo(b.id).sortByTimestamp().findFirst();
+      batchActor[b.id] = (first?.userId ?? 0) == 0 ? null : first!.userId;
+    }
+    int? nz(int? v) => v == null || v == 0 ? null : v;
+    final saleActor = {for (final s in sales) s.id: nz(s.statusChangedBy) ?? nz(s.cashierId)};
 
     String? iso(DateTime? d) => d?.toUtc().toIso8601String();
 
@@ -814,11 +1029,39 @@ class SyncService {
       expenseIds: expenses.map((e) => e.id).toList(),
       shiftIds: shifts.map((s) => s.id).toList(),
       userIds: users.map((u) => u.id).toList(),
+      settingsStamp: settingsDirty ? settings.settingsUpdatedAt : null,
       stamps: {
         'products': {for (final p in products) p.id: p.updatedAt},
         'sales': {for (final s in sales) s.id: s.updatedAt},
         'expenses': {for (final e in expenses) e.id: e.updatedAt},
         'users': {for (final u in users) u.id: '${u.updatedAt}|${u.pinHash}|${u.isActive}'},
+        'customers': {for (final c in customers) c.id: c.updatedAt},
+      },
+      actors: {
+        'products': [for (final p in products) p.modifiedBy],
+        'batches': [for (final b in batches) batchActor[b.id]],
+        'sales': [for (final s in sales) saleActor[s.id]],
+        'saleItems': [for (final i in items) saleActor[i.saleId]],
+        'stockMovements': [for (final m in movements) nz(m.userId)],
+        'expenses': [for (final e in expenses) nz(e.userId)],
+        'shifts': [for (final s in shifts) nz(s.userId)],
+        'users': [for (final u in users) u.modifiedBy ?? u.id],
+        'activityLogs': [for (final l in logs) nz(l.userId)],
+        if (forCloud) 'customers': [for (final c in customers) c.modifiedBy],
+        if (settingsDirty) 'settings': [settings.settingsModifiedBy],
+      },
+      ids: {
+        'products': [for (final p in products) p.id],
+        'batches': [for (final b in batches) b.id],
+        'sales': [for (final s in sales) s.id],
+        'saleItems': [for (final i in items) i.id],
+        'stockMovements': [for (final m in movements) m.id],
+        'expenses': [for (final e in expenses) e.id],
+        'shifts': [for (final s in shifts) s.id],
+        'users': [for (final u in users) u.id],
+        'activityLogs': [for (final l in logs) l.id],
+        if (forCloud) 'customers': [for (final c in customers) c.id],
+        if (settingsDirty) 'settings': [1],
       },
       collections: {
         'products': [
@@ -972,6 +1215,38 @@ class SyncService {
               'timestamp': iso(l.timestamp),
             }
         ],
+        if (forCloud)
+          'customers': [
+            for (final c in customers)
+              {
+                'uuid': c.uuid,
+                'name': c.name,
+                'phone': c.phone,
+                'email': c.email,
+                'notes': c.notes,
+                'updatedAt': iso(c.updatedAt ?? DateTime.now()),
+              }
+          ],
+        if (settingsDirty)
+          'settings': [
+            {
+              'name': settings.storeName,
+              'currency': settings.currency,
+              'vatRate': settings.vatRate,
+              'pricesIncludeTax': settings.pricesIncludeTax,
+              'settings': {
+                'storePhone': settings.storePhone,
+                'storeAddress': settings.storeAddress,
+                'taxId': settings.taxId,
+                'receiptFooter': settings.receiptFooter,
+                'enableCash': settings.enableCash,
+                'enableCard': settings.enableCard,
+                'enableMoMo': settings.enableMoMo,
+                'enableQr': settings.enableQr,
+              },
+              'updatedAt': iso(settings.settingsUpdatedAt ?? DateTime.now()),
+            }
+          ],
       },
     );
   }
@@ -1025,8 +1300,19 @@ class SyncChangeSet {
   /// Version of each record when it was collected, by collection and id.
   final Map<String, Map<int, Object?>> stamps;
 
+  /// Per collection, parallel to [collections]: the local user id of who
+  /// made each change (null if unknown) and the record's local id.
+  final Map<String, List<int?>> actors;
+  final Map<String, List<int>> ids;
+
+  /// settingsUpdatedAt when the settings were collected (null: not sent).
+  final DateTime? settingsStamp;
+
   SyncChangeSet({
     this.stamps = const {},
+    this.actors = const {},
+    this.ids = const {},
+    this.settingsStamp,
     required this.productIds,
     required this.batchIds,
     required this.saleIds,

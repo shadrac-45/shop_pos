@@ -44,6 +44,7 @@ class AuthService {
     user
       ..pinHash = await HashHelpers.hashPinAsync(pin)
       // Same PIN, new hash format: share it with the shop's other tills.
+      ..modifiedBy = user.id
       ..isSynced = false;
     await isar.writeTxn(() => isar.appUsers.put(user));
   }

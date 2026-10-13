@@ -53,8 +53,9 @@ class ShiftService {
   ShiftService._();
 
   static Future<Shift?> currentShift(Isar isar, int userId) => isar.shifts
-      .filter()
+      .where()
       .userIdEqualTo(userId)
+      .filter()
       .closedAtIsNull()
       .findFirst();
 
@@ -84,7 +85,7 @@ class ShiftService {
   }
 
   static Future<ShiftSummary> summarize(Isar isar, Shift shift) async {
-    final sales = await isar.sales.filter().shiftIdEqualTo(shift.id).findAll();
+    final sales = await isar.sales.where().shiftIdEqualTo(shift.id).findAll();
     final cashSales = sales.fold<double>(
       0,
       (sum, s) =>

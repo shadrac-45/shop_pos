@@ -17,8 +17,9 @@ final currentShiftProvider = StreamProvider.autoDispose<Shift?>((ref) {
   return ref
       .watch(isarProvider)
       .shifts
-      .filter()
+      .where()
       .userIdEqualTo(user.id)
+      .filter()
       .closedAtIsNull()
       .watch(fireImmediately: true)
       .map((list) => list.isEmpty ? null : list.first);

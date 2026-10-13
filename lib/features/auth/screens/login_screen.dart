@@ -10,11 +10,12 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import 'package:shop_pos/core/constants/app_assets.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/extensions/context_extensions.dart';
 import 'package:shop_pos/core/responsive/app_breakpoints.dart';
@@ -22,6 +23,11 @@ import 'package:shop_pos/core/theme/app_colors.dart';
 import 'package:shop_pos/core/theme/app_spacing.dart';
 import 'package:shop_pos/features/auth/providers/auth_provider.dart';
 import 'package:shop_pos/features/main/screens/main_shell_screen.dart';
+import 'package:shop_pos/features/shared/widgets/auth_scaffold.dart';
+
+/// Height of everything on this screen except the keypad: padding, logo,
+/// title, subtitle, PIN boxes and the gaps between them.
+const double _nonKeypadHeight = 300;
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -34,6 +40,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // ── PIN Entry State ─────────────────────────────────────
   String _pin = '';
   bool _isAuthenticating = false;
+
+  /// Set once the POS has been opened, so it's opened only once (signing
+  /// in also rebuilds this screen, which would otherwise open it again).
+  bool _leaving = false;
 
   // The lockout itself lives in AuthNotifier (and survives restarts);
   // this only mirrors it for the countdown banner.
@@ -105,6 +115,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  void _openPos() {
+    if (_leaving || !mounted) return;
+    _leaving = true;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const MainShellScreen()),
+      (_) => false,
+    );
+  }
+
   Future<void> _attemptLogin() async {
     setState(() => _isAuthenticating = true);
     final enteredPin = _pin;
@@ -121,10 +140,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     switch (result) {
       case LoginResult.success:
         HapticFeedback.mediumImpact();
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const MainShellScreen()),
-          (_) => false,
-        );
+        _openPos();
 
       case LoginResult.deactivated:
         HapticFeedback.vibrate();
@@ -160,248 +176,216 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProvider);
 
-    if (user != null && user.isActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const MainShellScreen()),
-            (_) => false,
-          );
-        }
-      });
+    // Already signed in (e.g. returning to this screen): straight to the
+    // POS. During a PIN sign-in, _attemptLogin opens it instead.
+    if (user != null && user.isActive && !_isAuthenticating) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openPos());
     }
 
     final mq = MediaQuery.of(context);
-    final screenHeight = mq.size.height;
     final screenWidth = mq.size.width;
-    final isLandscape = AppBreakpoints.isLandscape(context);
-
-    final logoSize = isLandscape
-        ? (screenHeight * 0.22).clamp(50.0, 90.0)
-        : AppBreakpoints.logoHeight(screenHeight);
 
     final dotW = AppBreakpoints.pinDotWidth(screenWidth * 0.88);
     final dotH = AppBreakpoints.pinDotHeight(screenWidth * 0.88);
-    final keypadMaxW = (screenWidth * 0.80).clamp(0.0, 340.0);
+    // Wide but short screens (landscape tablets, small laptops): size the
+    // keypad from the height left after the header and PIN boxes too, so
+    // the ✓ key stays on screen without scrolling.
+    final heightForKeys = mq.size.height - mq.padding.vertical - _nonKeypadHeight;
+    final keypadByHeight = (heightForKeys - 36) / 4 * 1.25 * 3 + 24;
+    final keypadMaxW = math.min(screenWidth * 0.80, math.max(keypadByHeight, 240.0)).clamp(0.0, 340.0);
 
-    return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          padding: EdgeInsets.symmetric(
-            horizontal: screenWidth * 0.06,
-            vertical: AppSpacing.md,
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: (screenHeight -
-                      mq.padding.top -
-                      mq.padding.bottom -
-                      AppSpacing.md * 2)
-                  .clamp(0.0, double.infinity),
+    return AuthScaffold(
+      maxWidth: 400,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Header (shared with the other sign-in screens) ──
+          if (Navigator.of(context).canPop())
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                child: TextButton.icon(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.arrow_back_rounded, size: 20),
+                  label: const Text('Back'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.textSecondary,
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+                  ),
+                ),
+              ),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // ── Brand Logo ───────────────────────────────
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: AppSpacing.borderLg,
-                    border: Border.all(color: AppColors.border),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.primary.withValues(alpha: 0.1),
-                        blurRadius: 20,
-                        offset: const Offset(0, 4),
+          const AuthHeader(
+            title: 'Staff sign in',
+            subtitle: 'Enter your 4–6 digit PIN, then tap ✓',
+          ),
+
+          const SizedBox(height: AppSpacing.xl),
+
+          // ── Lockout Warning Banner ───────────────────
+          if (_isLockedOut)
+            Container(
+              margin: const EdgeInsets.only(bottom: AppSpacing.md),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: AppSpacing.sm,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.danger.withValues(alpha: 0.12),
+                borderRadius: AppSpacing.borderMd,
+                border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.timer_rounded,
+                      color: AppColors.danger, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Keypad locked. Retry in ${_lockoutSeconds}s',
+                    style: const TextStyle(
+                      color: AppColors.danger,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // ── PIN Indicator Dots ────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            // Always show at least the minimum number of boxes; grow
+            // up to the maximum as longer PINs are typed.
+            children: List.generate(
+                _pin.length.clamp(AppConstants.minPinLength,
+                    AppConstants.maxPinLength), (index) {
+              final filled = index < _pin.length;
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                margin: const EdgeInsets.symmetric(horizontal: 6),
+                width: dotW,
+                height: dotH,
+                decoration: BoxDecoration(
+                  color: filled
+                      ? AppColors.primary.withValues(alpha: 0.15)
+                      : AppColors.cardBg,
+                  border: Border.all(
+                    color: _isLockedOut
+                        ? AppColors.danger
+                        : (filled ? AppColors.primary : AppColors.border),
+                    width: filled ? 2.0 : 1.0,
+                  ),
+                  borderRadius: AppSpacing.borderMd,
+                ),
+                child: Center(
+                  child: !filled
+                      ? Text(
+                          '•',
+                          style: TextStyle(
+                            fontSize: 24,
+                            color: _isLockedOut
+                                ? AppColors.danger
+                                : AppColors.textMuted,
+                          ),
+                        )
+                      : Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: _isLockedOut
+                                ? AppColors.danger
+                                : AppColors.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                ),
+              );
+            }),
+          ),
+
+          const SizedBox(height: AppSpacing.xl),
+
+          // ── Numeric Keypad ────────────────────────────
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: keypadMaxW),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                childAspectRatio: 1.25,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+              ),
+              itemCount: 12,
+              itemBuilder: (context, index) {
+                if (index == 9) {
+                  return ElevatedButton(
+                    onPressed: _isLockedOut ? null : _onSubmit,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: AppSpacing.borderLg),
+                      elevation: 0,
+                    ),
+                    child: _isAuthenticating
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2.5, color: Colors.white),
+                          )
+                        : const Icon(Icons.check_rounded, size: 26),
+                  );
+                }
+                if (index == 11) {
+                  return OutlinedButton(
+                    onPressed: _isLockedOut ? null : _onBackspace,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.border),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: AppSpacing.borderLg),
+                      backgroundColor: AppColors.cardBg,
+                      foregroundColor: AppColors.textSecondary,
+                    ),
+                    child: const Icon(Icons.backspace_rounded, size: 22),
+                  );
+                }
+                final number =
+                    index == 10 ? '0' : (index + 1).toString();
+                return ElevatedButton(
+                  onPressed: _isLockedOut ? null : () => _onNumberPress(number),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.cardBg,
+                    foregroundColor: AppColors.textPrimary,
+                    side: const BorderSide(color: AppColors.border),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: AppSpacing.borderLg),
+                    elevation: 0,
+                  ),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      number,
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: _isLockedOut
+                            ? AppColors.textMuted
+                            : AppColors.textPrimary,
                       ),
-                    ],
-                  ),
-                  padding: const EdgeInsets.all(AppSpacing.md),
-                  child: Image.asset(
-                    AppAssets.shopposLogo,
-                    height: logoSize,
-                    width: logoSize,
-                    fit: BoxFit.contain,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-
-                Text(
-                  'Welcome to ShopPOS',
-                  style: Theme.of(context).textTheme.headlineLarge,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Enter your 4–6 digit PIN, then tap ✓',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                  textAlign: TextAlign.center,
-                ),
-
-                const SizedBox(height: AppSpacing.xl),
-
-                // ── Lockout Warning Banner ───────────────────
-                if (_isLockedOut)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: AppSpacing.md),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.md,
-                      vertical: AppSpacing.sm,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.danger.withValues(alpha: 0.12),
-                      borderRadius: AppSpacing.borderMd,
-                      border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.timer_rounded,
-                            color: AppColors.danger, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Keypad locked. Retry in ${_lockoutSeconds}s',
-                          style: const TextStyle(
-                            color: AppColors.danger,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
                     ),
                   ),
-
-                // ── PIN Indicator Dots ────────────────────────
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  // Always show at least the minimum number of boxes; grow
-                  // up to the maximum as longer PINs are typed.
-                  children: List.generate(
-                      _pin.length.clamp(AppConstants.minPinLength,
-                          AppConstants.maxPinLength), (index) {
-                    final filled = index < _pin.length;
-                    return AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      margin: const EdgeInsets.symmetric(horizontal: 6),
-                      width: dotW,
-                      height: dotH,
-                      decoration: BoxDecoration(
-                        color: filled
-                            ? AppColors.primary.withValues(alpha: 0.15)
-                            : AppColors.cardBg,
-                        border: Border.all(
-                          color: _isLockedOut
-                              ? AppColors.danger
-                              : (filled ? AppColors.primary : AppColors.border),
-                          width: filled ? 2.0 : 1.0,
-                        ),
-                        borderRadius: AppSpacing.borderMd,
-                      ),
-                      child: Center(
-                        child: !filled
-                            ? Text(
-                                '•',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  color: _isLockedOut
-                                      ? AppColors.danger
-                                      : AppColors.textMuted,
-                                ),
-                              )
-                            : Container(
-                                width: 14,
-                                height: 14,
-                                decoration: BoxDecoration(
-                                  color: _isLockedOut
-                                      ? AppColors.danger
-                                      : AppColors.primary,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                      ),
-                    );
-                  }),
-                ),
-
-                const SizedBox(height: AppSpacing.xl),
-
-                // ── Numeric Keypad ────────────────────────────
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: keypadMaxW),
-                  child: GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
-                      childAspectRatio: 1.25,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                    ),
-                    itemCount: 12,
-                    itemBuilder: (context, index) {
-                      if (index == 9) {
-                        return ElevatedButton(
-                          onPressed: _isLockedOut ? null : _onSubmit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: AppSpacing.borderLg),
-                            elevation: 0,
-                          ),
-                          child: const Icon(Icons.check_rounded, size: 26),
-                        );
-                      }
-                      if (index == 11) {
-                        return OutlinedButton(
-                          onPressed: _isLockedOut ? null : _onBackspace,
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: AppColors.border),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: AppSpacing.borderLg),
-                            backgroundColor: AppColors.cardBg,
-                            foregroundColor: AppColors.textSecondary,
-                          ),
-                          child: const Icon(Icons.backspace_rounded, size: 22),
-                        );
-                      }
-                      final number =
-                          index == 10 ? '0' : (index + 1).toString();
-                      return ElevatedButton(
-                        onPressed: _isLockedOut ? null : () => _onNumberPress(number),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.cardBg,
-                          foregroundColor: AppColors.textPrimary,
-                          side: const BorderSide(color: AppColors.border),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: AppSpacing.borderLg),
-                          elevation: 0,
-                        ),
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            number,
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              color: _isLockedOut
-                                  ? AppColors.textMuted
-                                  : AppColors.textPrimary,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-
-
-              ],
+                );
+              },
             ),
           ),
-        ),
+
+        ],
       ),
     );
   }
