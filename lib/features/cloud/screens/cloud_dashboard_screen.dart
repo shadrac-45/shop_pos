@@ -78,9 +78,6 @@ class CloudDashboardScreen extends ConsumerStatefulWidget {
 class _CloudDashboardScreenState extends ConsumerState<CloudDashboardScreen> {
   CloudApi? _api;
   List<Map<String, dynamic>> _shops = const [];
-
-  /// Whether this business may add shops (from the server; see GET /shops).
-  bool _canAddShops = false;
   String? _shopId;
   String? _error;
   int _reload = 0;
@@ -112,8 +109,6 @@ class _CloudDashboardScreenState extends ConsumerState<CloudDashboardScreen> {
       final r = await _api!.call('GET', '/shops');
       setState(() {
         _shops = [for (final s in r['shops'] as List) Map<String, dynamic>.from(s as Map)];
-        // The server decides (owner + the platform allows branches).
-        _canAddShops = r['canAddShops'] == true;
         _shopId = _shops.any((s) => s['id'] == settings.cloudShopId)
             ? settings.cloudShopId
             : (_shops.isEmpty ? null : _shops.first['id'] as String);
@@ -230,7 +225,7 @@ class _CloudDashboardScreenState extends ConsumerState<CloudDashboardScreen> {
               : Text(_shops.isEmpty ? 'Cloud dashboard' : '${_shops.first['name']}'),
           actions: [
             const NotificationBell(),
-            if (Permissions.can(user, Permission.manageShops) && _canAddShops && _api != null)
+            if (Permissions.can(user, Permission.manageShops) && _api != null)
               IconButton(tooltip: 'Add a shop', icon: const Icon(Icons.add_business_rounded), onPressed: _addShop),
             IconButton(
               tooltip: 'Refresh',
