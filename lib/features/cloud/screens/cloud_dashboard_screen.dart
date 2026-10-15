@@ -119,30 +119,6 @@ class _CloudDashboardScreenState extends ConsumerState<CloudDashboardScreen> {
     }
   }
 
-  Future<void> _addShop() async {
-    final name = TextEditingController();
-    final ok = await showAppDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add a shop'),
-        content: TextField(controller: name, decoration: const InputDecoration(labelText: 'Shop name')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Add')),
-        ],
-      ),
-    );
-    if (ok != true || name.text.trim().isEmpty) return;
-    try {
-      final r = await _api!.call('POST', '/shops', body: {'name': name.text.trim()});
-      await _start();
-      setState(() => _shopId = (r['shop'] as Map)['id'] as String);
-      if (mounted) context.showSuccessSnackbar('Added ${name.text.trim()}.');
-    } catch (e) {
-      if (mounted) context.showErrorSnackbar('$e');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProvider);
@@ -225,8 +201,8 @@ class _CloudDashboardScreenState extends ConsumerState<CloudDashboardScreen> {
               : Text(_shops.isEmpty ? 'Cloud dashboard' : '${_shops.first['name']}'),
           actions: [
             const NotificationBell(),
-            if (Permissions.can(user, Permission.manageShops) && _api != null)
-              IconButton(tooltip: 'Add a shop', icon: const Icon(Icons.add_business_rounded), onPressed: _addShop),
+            // "Add a shop" is on hold until branches get their own setup
+            // (the server refuses it too: BRANCHES_ENABLED).
             IconButton(
               tooltip: 'Refresh',
               icon: const Icon(Icons.refresh_rounded),
