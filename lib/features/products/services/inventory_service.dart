@@ -181,7 +181,7 @@ class InventoryService {
       batch = Batch()
         ..productId = productId
         ..quantity = 0
-        ..expiryDate = now.add(const Duration(days: 365))
+        ..expiryDate = kNoExpiryDate
         ..restockDate = now
         ..uuid = IdHelpers.newUuid();
       await isar.batchs.put(batch);
@@ -255,7 +255,7 @@ class InventoryService {
           isar,
           product: product,
           quantity: initialQuantity,
-          expiryDate: expiryDate ?? now.add(const Duration(days: 365)),
+          expiryDate: expiryDate ?? kNoExpiryDate,
           supplierNote: supplierNote,
           unitCost: input.costPrice,
           type: StockMovementType.initial,

@@ -32,6 +32,11 @@ const int kLowStockBelow = 5;
 /// Stock expiring within this many days is "expiring soon".
 const int kExpiringSoonDays = 31;
 
+/// Expiry for stock that has no date (imported or added without one, items
+/// that don't expire): far enough ahead that it never shows as expiring.
+/// Local time, as the database returns dates.
+final DateTime kNoExpiryDate = DateTime(2099, 12, 31, 23, 59, 59);
+
 enum StockLevel { normal, low, out }
 
 enum ExpiryState { normal, soon, expired }

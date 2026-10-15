@@ -9,6 +9,7 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:isar/isar.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
 import 'package:shop_pos/core/utils/id_helpers.dart';
@@ -338,11 +339,10 @@ class SetupWizardNotifier extends Notifier<WizardState> {
             ..updatedAt = now;
           final productId = await isar.products.put(product);
           if (qty > 0) {
-            final farFuture = now.add(const Duration(days: 3650));
             final batch = Batch()
               ..productId = productId
               ..quantity = qty
-              ..expiryDate = farFuture
+              ..expiryDate = kNoExpiryDate
               ..restockDate = now
               ..uuid = IdHelpers.newUuid()
               ..updatedAt = now;

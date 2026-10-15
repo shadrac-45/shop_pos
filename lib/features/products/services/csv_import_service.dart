@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:shop_pos/features/products/models/product_status.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
@@ -240,7 +241,6 @@ This Way Chocolate Drink,2.50,150,Beverages''';
     var updated = 0;
     var skipped = 0;
     final skipReasons = <String>[];
-    final farFuture = DateTime.now().add(const Duration(days: 365));
     final palette = AppConstants.quickButtonPalette;
 
     await isar.writeTxn(() async {
@@ -328,7 +328,7 @@ This Way Chocolate Drink,2.50,150,Beverages''';
             final batch = Batch()
               ..productId = productId
               ..quantity = row.quantity
-              ..expiryDate = row.expiryDate ?? farFuture
+              ..expiryDate = row.expiryDate ?? kNoExpiryDate
               ..restockDate = DateTime.now()
               ..supplierNote = 'Imported'
               ..unitCost = row.costPrice

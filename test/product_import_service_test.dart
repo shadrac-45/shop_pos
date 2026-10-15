@@ -18,6 +18,10 @@ import 'package:shop_pos/core/database/schemas.dart';
 import 'package:shop_pos/features/products/models/batch.dart';
 import 'package:shop_pos/features/products/models/product.dart';
 import 'package:shop_pos/features/products/services/csv_import_service.dart';
+import 'package:shop_pos/features/products/models/product_status.dart';
+import 'package:shop_pos/features/products/services/inventory_service.dart';
+import 'package:shop_pos/core/constants/app_constants.dart';
+import 'package:shop_pos/features/auth/models/app_user.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -115,6 +119,38 @@ void main() {
       final product = (await isar.products.where().findFirst())!;
       await product.batches.load();
       expect(product.totalStock, 45);
+    });
+
+    test('stock imported without an expiry date never shows as expiring', () async {
+      final parsed = CsvImportService.parseCsv(
+        'name,price,quantity\n'
+        'Kitchen Foil,15.00,4',
+      );
+
+      await CsvImportService.importProductsWithSummary(isar: isar, rows: parsed.rows);
+
+      final batch = (await isar.batchs.where().findFirst())!;
+      expect(batch.expiryDate, kNoExpiryDate);
+      final product = (await isar.products.where().findFirst())!;
+      await product.batches.load();
+      expect(product.health.shelfExpiry, ExpiryState.normal);
+      expect(product.health.daysToNextExpiry! > 365 * 50, isTrue,
+          reason: 'not "one year from today", which turns into an expiry warning');
+    });
+
+    test('a product created with opening stock but no date does not expire either', () async {
+      final owner = AppUser()
+        ..name = 'Owner'
+        ..role = AppConstants.roleOwner
+        ..pinHash = 'x';
+      final product = await InventoryService.createProduct(
+        isar,
+        owner,
+        const ProductInput(name: 'Men Watch', price: 120, category: 'Watches', quickButtonColor: 0),
+        initialQuantity: 7,
+      );
+      final batch = (await isar.batchs.where().productIdEqualTo(product.id).findFirst())!;
+      expect(batch.expiryDate, kNoExpiryDate);
     });
 
     test('stores barcode and cost price when the file supplies them', () async {

@@ -42,6 +42,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 
+import 'package:shop_pos/features/products/models/product_status.dart';
 import 'package:shop_pos/core/services/cloud_service.dart';
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
@@ -884,7 +885,7 @@ class SyncService {
           ..uuid = batchUuid is String ? batchUuid : IdHelpers.newUuid()
           ..productId = product.id
           ..quantity = 0
-          ..expiryDate = DateTime.now().add(const Duration(days: 365))
+          ..expiryDate = kNoExpiryDate
           ..restockDate = DateTime.now();
         await isar.batchs.put(batch);
         batch.product.value = product;
