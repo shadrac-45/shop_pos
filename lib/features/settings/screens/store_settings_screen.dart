@@ -198,10 +198,11 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
               const SectionLabel('Payment methods'),
               toggle('Cash', _cash, (v) => _cash = v),
               toggle('Mobile Money (Paystack)', _momo, (v) => _momo = v,
-                  subtitle: 'Needs the backend set up in Integrations.'),
+                  subtitle: 'The customer approves on their phone; the sale completes only after '
+                      'Paystack confirms the payment. Needs the payment server in Integrations.'),
               toggle('Mobile Money (manual)', _manualMomo, (v) => _manualMomo = v,
-                  subtitle: 'The customer sends money to your own MoMo number; the cashier records it. '
-                      'No automatic check: match these sales to your MoMo statement.'),
+                  subtitle: 'The customer sends to your own MoMo number; the cashier checks it arrived '
+                      'and confirms the amount. Not checked by Paystack: match these to your MoMo statement.'),
               if (_manualMomo) ...[
                 field(_momoNumber, 'Shop MoMo number', hint: '0244123456', keyboard: TextInputType.phone,
                     validator: (v) => normaliseGhanaPhone(v ?? '') == null

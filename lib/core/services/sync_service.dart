@@ -771,6 +771,9 @@ class SyncService {
               ..method = (p as Map)['method'] as String? ?? 'cash'
               ..amount = _num(p['amount']) ?? 0
               ..reference = p['reference'] as String?
+              ..confirmedBy = p['confirmedBy'] as String?
+              ..confirmedByName = p['confirmedByName'] as String?
+              ..confirmedAt = _date(p['confirmedAt'])
         ]
         ..status = r['status'] as String? ?? SaleStatus.completed
         ..refundedAmount = _num(r['refundedAmount']) ?? 0
@@ -1118,7 +1121,17 @@ class SyncService {
               'changeDue': s.changeDue,
               'payments': [
                 for (final p in s.effectivePayments)
-                  {'method': p.method, 'amount': p.amount, 'reference': p.reference}
+                  {
+                    'method': p.method,
+                    'amount': p.amount,
+                    'reference': p.reference,
+                    // Manual MoMo: who checked the money arrived, and when.
+                    if (p.confirmedAt != null) ...{
+                      'confirmedBy': p.confirmedBy,
+                      'confirmedByName': p.confirmedByName,
+                      'confirmedAt': iso(p.confirmedAt!),
+                    },
+                  }
               ],
               'status': s.status,
               'refundedAmount': s.refundedAmount,

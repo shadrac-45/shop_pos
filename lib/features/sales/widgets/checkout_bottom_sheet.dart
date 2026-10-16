@@ -70,6 +70,10 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
   final List<_SplitRow> _splitRows = [];
   final _tenderedCtrl = TextEditingController();
   final _referenceCtrl = TextEditingController();
+
+  /// Manual MoMo: what the cashier saw arrive, and that they checked it.
+  final _momoReceivedCtrl = TextEditingController();
+  bool _momoChecked = false;
   bool _isCompleting = false;
 
   /// Problem with the payment, shown inside the sheet right above the
@@ -85,6 +89,7 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
   void dispose() {
     _tenderedCtrl.dispose();
     _referenceCtrl.dispose();
+    _momoReceivedCtrl.dispose();
     for (final r in _splitRows) {
       r.dispose();
     }
@@ -142,11 +147,18 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
         _showError('Use only one Mobile Money part per sale.');
         return;
       }
+      final manualParts = _splitRows
+          .where((r) => r.method == AppConstants.paymentMomoManual && parseMoney(r.amount.text) > 0);
+      if (manualParts.isNotEmpty && !_momoChecked) {
+        _showError('Check the MoMo payment on the shop phone, then tick the box.');
+        return;
+      }
       payments = [
         for (final r in _splitRows)
           if (r.method != AppConstants.paymentMomo && parseMoney(r.amount.text) > 0)
             PaymentInput(r.method, parseMoney(r.amount.text),
-                reference: r.reference.text.trim().isEmpty ? null : r.reference.text.trim()),
+                reference: r.reference.text.trim().isEmpty ? null : r.reference.text.trim(),
+                confirmedReceived: r.method == AppConstants.paymentMomoManual && _momoChecked),
       ];
       if (momoRows.isNotEmpty && parseMoney(momoRows.first.amount.text) > 0) {
         return _goToMomo(parseMoney(momoRows.first.amount.text), payments, totals);
@@ -160,10 +172,23 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
       if (method == AppConstants.paymentMomo) {
         return _goToMomo(total, const [], totals);
       }
-      payments = [
-        PaymentInput(method, total,
-            reference: _referenceCtrl.text.trim().isEmpty ? null : _referenceCtrl.text.trim()),
-      ];
+      if (method == AppConstants.paymentMomoManual) {
+        final problem = _manualMomoProblem(total);
+        if (problem != null) {
+          _showError(problem);
+          return;
+        }
+        payments = [
+          PaymentInput(method, total,
+              reference: _referenceCtrl.text.trim().isEmpty ? null : _referenceCtrl.text.trim(),
+              confirmedReceived: true),
+        ];
+      } else {
+        payments = [
+          PaymentInput(method, total,
+              reference: _referenceCtrl.text.trim().isEmpty ? null : _referenceCtrl.text.trim()),
+        ];
+      }
     }
 
     final tendered = _tenderedCtrl.text.trim().isEmpty ? null : parseMoney(_tenderedCtrl.text);
@@ -192,6 +217,27 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
       setState(() => _isCompleting = false);
       _showError(errorMessage(e));
     }
+  }
+
+  /// What is wrong with the manual MoMo entry, or null when it can be
+  /// completed. Same rules as every payment: the total, exactly (only cash
+  /// gives change; there are no part-payments).
+  String? _manualMomoProblem(double total) {
+    final raw = _momoReceivedCtrl.text.trim();
+    if (raw.isEmpty) return 'Enter the amount you received on the shop phone.';
+    final received = roundMoney(parseMoney(raw));
+    final due = roundMoney(total);
+    if (received <= 0) return 'Enter the amount you received on the shop phone.';
+    if (received + 0.005 < due) {
+      return 'Received ${CurrencyHelpers.format(received)}, but the total is ${CurrencyHelpers.format(due)}. '
+          'Ask for the rest, or use Split to take the rest in cash.';
+    }
+    if (received > due + 0.005) {
+      return 'Received ${CurrencyHelpers.format(received)}, more than the total of ${CurrencyHelpers.format(due)}. '
+          'MoMo can\'t give change: send the extra back, then enter ${CurrencyHelpers.format(due)}.';
+    }
+    if (!_momoChecked) return 'Check the payment on the shop phone, then tick the box.';
+    return null;
   }
 
   void _goToMomo(double momoAmount, List<PaymentInput> otherPayments, SaleTotals totals) {
@@ -478,6 +524,8 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
                     onTap: () => setState(() {
                       _selectedMethod = m;
                       _tenderedCtrl.clear();
+                      _momoReceivedCtrl.clear();
+                      _momoChecked = false;
                     }),
                     compact: true,
                   ),
@@ -496,17 +544,26 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
           const SizedBox(height: AppSpacing.md),
           _ManualMomoDetails(settings: ref.watch(storeSettingsProvider)),
           const SizedBox(height: AppSpacing.sm),
+          MoneyField(
+            controller: _momoReceivedCtrl,
+            label: 'Amount received',
+            hint: 'As shown on the shop phone',
+            onChanged: (_) => setState(() => _error = null),
+          ),
+          const SizedBox(height: AppSpacing.sm),
           TextField(
             controller: _referenceCtrl,
             decoration: const InputDecoration(
               labelText: 'MoMo transaction ID (optional)',
-              hintText: 'From the customer\'s confirmation SMS',
+              hintText: 'From the MoMo confirmation message',
             ),
           ),
-          const SizedBox(height: AppSpacing.xs),
-          const Text(
-            'Complete the sale only after you have seen the customer\'s MoMo confirmation.',
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+          _MomoCheckedBox(
+            value: _momoChecked,
+            onChanged: (v) => setState(() {
+              _momoChecked = v;
+              _error = null;
+            }),
           ),
         ],
         if (selected == AppConstants.paymentCard || selected == AppConstants.paymentQr) ...[
@@ -602,6 +659,14 @@ class _CheckoutBottomSheetState extends ConsumerState<CheckoutBottomSheet> {
             ),
           ],
         ),
+        if (_splitRows.any((r) => r.method == AppConstants.paymentMomoManual))
+          _MomoCheckedBox(
+            value: _momoChecked,
+            onChanged: (v) => setState(() {
+              _momoChecked = v;
+              _error = null;
+            }),
+          ),
         if (_splitRows.any((r) => r.method == AppConstants.paymentMomo))
           const Text(
             'The Mobile Money part is charged next; the sale is saved once the customer approves it.',
@@ -721,6 +786,25 @@ class _ManualMomoDetails extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// "I've checked this payment": a manual MoMo sale can't complete without it.
+class _MomoCheckedBox extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _MomoCheckedBox({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      value: value,
+      onChanged: (v) => onChanged(v ?? false),
+      title: const Text("I've checked this MoMo payment on the shop phone"),
+      subtitle: const Text('The money has arrived, for this amount.'),
     );
   }
 }

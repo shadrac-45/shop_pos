@@ -29,6 +29,13 @@ class SalePayment {
 
   /// Paystack reference, card slip number, QR transaction ID, etc.
   String? reference;
+
+  /// Manual MoMo only: who checked the money had arrived (their account's
+  /// cloud uuid and name) and when. Never set for Paystack payments, which
+  /// are verified by the payment server instead (see Sale.paystackReference).
+  String? confirmedBy;
+  String? confirmedByName;
+  DateTime? confirmedAt;
 }
 
 /// Money given back to the customer, by a refund or a void.

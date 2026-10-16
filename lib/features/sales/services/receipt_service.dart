@@ -17,6 +17,7 @@ import 'package:isar/isar.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import 'package:shop_pos/features/sales/services/payment_proof.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
@@ -167,8 +168,10 @@ class ReceiptService {
           row('TOTAL', _money(s.totalAmount),
               style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
-          for (final p in s.effectivePayments)
+          for (final p in s.effectivePayments) ...[
             row('Paid by ${AppConstants.paymentLabel(p.method)}', _money(p.amount)),
+            if (paymentProof(s, p) case final proof?) pw.Text(proof, style: const pw.TextStyle(fontSize: 7)),
+          ],
           if (s.amountTendered != null) ...[
             row('Cash tendered', _money(s.amountTendered!)),
             row('Change', _money(s.changeDue)),

@@ -372,7 +372,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     return _Fields(children: [
       _switch(
           'Cash', s.enableCash, (v) => set((w) => w.copyWith(enableCash: v))),
-      _switch('Mobile Money', s.enableMoMo,
+      _switch('Mobile Money (Paystack)', s.enableMoMo,
           (v) => set((w) => w.copyWith(enableMoMo: v)),
           subtitle: 'MTN, Telecel and AirtelTigo through Paystack'),
       _switch(

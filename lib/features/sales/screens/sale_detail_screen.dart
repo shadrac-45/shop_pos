@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import 'package:shop_pos/features/sales/services/payment_proof.dart';
 import 'package:shop_pos/core/auth/permissions.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/database/database_provider.dart';
@@ -476,10 +477,16 @@ class _ReceiptCard extends StatelessWidget {
                 CurrencyHelpers.format(s.taxAmount)),
           row('Total', CurrencyHelpers.format(s.totalAmount), bold: true),
           const SizedBox(height: AppSpacing.sm),
-          for (final p in s.effectivePayments)
+          for (final p in s.effectivePayments) ...[
             row('Paid by ${AppConstants.paymentLabel(p.method)}'
                 '${p.reference != null && p.reference!.isNotEmpty ? ' (${p.reference})' : ''}',
                 CurrencyHelpers.format(p.amount)),
+            if (paymentProof(s, p) case final proof?)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(proof, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              ),
+          ],
           if (s.amountTendered != null) ...[
             row('Cash tendered', CurrencyHelpers.format(s.amountTendered!)),
             row('Change', CurrencyHelpers.format(s.changeDue)),

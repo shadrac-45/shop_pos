@@ -14,6 +14,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import 'package:shop_pos/features/sales/services/sale_service.dart';
+import 'package:shop_pos/features/sales/models/sale.dart';
 import 'package:shop_pos/core/models/store_settings.dart';
 import 'package:shop_pos/core/providers/store_settings_provider.dart';
 import 'package:shop_pos/core/theme/app_theme.dart';
@@ -62,6 +64,24 @@ class FakeCart extends CartNotifier {
   }
 
   final List<String> added = [];
+
+  /// The payments checkout asked to complete, for tests to inspect. The sale
+  /// is not saved: the call stops with [stopMessage].
+  final List<List<PaymentInput>> completed = [];
+  static const stopMessage = 'Recorded by the test.';
+
+  @override
+  Future<Sale> completeSale({
+    required List<PaymentInput> payments,
+    double? amountTendered,
+    String? paystackReference,
+    String? momoProvider,
+    String? momoPhone,
+    int? cashierId,
+  }) async {
+    completed.add(payments);
+    throw SaleValidationException(stopMessage);
+  }
 
   @override
   Future<AddItemResult> addItem(Product product, int quantity) async {

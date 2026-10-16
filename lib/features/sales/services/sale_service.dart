@@ -53,7 +53,12 @@ class PaymentInput {
   final String method;
   final double amount;
   final String? reference;
-  const PaymentInput(this.method, this.amount, {this.reference});
+
+  /// Manual MoMo: the cashier checked the money arrived on the shop's
+  /// phone. Required for that method; ignored for the others.
+  final bool confirmedReceived;
+
+  const PaymentInput(this.method, this.amount, {this.reference, this.confirmedReceived = false});
 }
 
 /// Tax settings applied to a sale.
@@ -136,6 +141,10 @@ class SaleService {
     if (payments.any((p) => p.amount < 0)) {
       throw SaleValidationException('Payment amounts cannot be negative.');
     }
+    if (payments.any((p) => p.method == AppConstants.paymentMomoManual && p.amount > 0 && !p.confirmedReceived)) {
+      throw SaleValidationException(
+          'Check the MoMo payment on the shop phone and confirm it before completing the sale.');
+    }
     if ((paid - totals.total).abs() > _tolerance) {
       throw SaleValidationException(
           'Payments (${paid.toStringAsFixed(2)}) must equal the total '
@@ -182,7 +191,11 @@ class SaleService {
           SalePayment()
             ..method = p.method
             ..amount = roundMoney(p.amount)
-            ..reference = p.reference,
+            ..reference = p.reference
+            // Who checked a manual MoMo payment, and when (never a gateway check).
+            ..confirmedBy = p.method == AppConstants.paymentMomoManual ? user?.uuid : null
+            ..confirmedByName = p.method == AppConstants.paymentMomoManual ? user?.name : null
+            ..confirmedAt = p.method == AppConstants.paymentMomoManual ? now : null,
       ]
       ..paystackReference = paystackReference
       ..momoProvider = momoProvider

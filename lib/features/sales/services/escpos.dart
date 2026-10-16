@@ -15,6 +15,7 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:shop_pos/features/sales/services/payment_proof.dart';
 import 'package:shop_pos/core/constants/app_constants.dart';
 import 'package:shop_pos/core/utils/currency_helpers.dart';
 import 'package:shop_pos/features/sales/models/sale.dart';
@@ -177,6 +178,11 @@ class EscPosReceipt {
       ..bold(false);
     for (final pay in s.effectivePayments) {
       p.row(AppConstants.paymentLabel(pay.method), _money(pay.amount));
+      if (paymentProof(s, pay) case final proof?) {
+        for (final l in EscPosBuilder.wrap(proof, p.width)) {
+          p.line(l);
+        }
+      }
     }
     if (s.amountTendered != null) {
       p
